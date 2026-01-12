@@ -1,0 +1,47 @@
+# Gemini OAuth Provider Plugin Manifest
+# Full LLM provider using Gemini CLI OAuth credentials with Cloud Code Assist API
+
+[plugin]
+name = "gemini-oauth"
+version = "0.2.0"
+description = "Gemini LLM provider (supports GEMINI_API_KEY or OAuth)"
+author = "InnoDrupe"
+homepage = "https://github.com/InnoDrupe/tark-plugin-gemini-oauth"
+type = "provider"
+api_version = "0.1"
+
+# Capabilities required by this plugin
+[capabilities]
+# Persist tokens and credentials
+storage = true
+
+# HTTP access for token refresh and Gemini APIs
+http = [
+    "oauth2.googleapis.com",
+    "cloudcode-pa.googleapis.com",
+    "generativelanguage.googleapis.com"
+]
+
+# Environment variables to check for project ID and API key
+env = [
+    "GOOGLE_CLOUD_PROJECT",
+    "GCLOUD_PROJECT",
+    "GCP_PROJECT",
+    "HOME",
+    "GEMINI_API_KEY",
+    "GEMINI_OAUTH_CLIENT_ID",
+    "GEMINI_OAUTH_CLIENT_SECRET"
+]
+
+# No shell access needed
+shell = false
+
+# Plugin contributions
+[contributes]
+providers = [
+    { id = "gemini-oauth", name = "Gemini (OAuth/Key)", description = "Uses GEMINI_API_KEY or OAuth credentials", base_provider = "google" }
+]
+
+# Activation events
+[activation]
+events = ["onProvider:gemini-oauth"]

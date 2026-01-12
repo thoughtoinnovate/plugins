@@ -1,0 +1,17 @@
+# Gemini OAuth Plugin for Tark
+# Provides OAuth authentication via Gemini CLI credentials
+
+[plugin]
+name = "gemini-auth"
+version = "0.1.0"
+description = "OAuth authentication for Google Gemini using Gemini CLI credentials"
+author = "InnoDrupe"
+license = "MIT"
+
+[plugin.capabilities]
+auth_provider = true
+provider_name = "gemini"
+
+[plugin.config]
+# Path to Gemini CLI credentials (default: ~/.gemini/oauth_creds.json)
+credentials_path = "~/.gemini/oauth_creds.json"
