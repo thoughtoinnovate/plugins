@@ -24,7 +24,7 @@
 
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Get or download the tark binary
@@ -51,7 +51,9 @@ fn get_tark_binary() -> PathBuf {
         "tark"
     };
 
-    let cached_binary = cache_dir.join(format!("tark-{}", version)).join(binary_name);
+    let cached_binary = cache_dir
+        .join(format!("tark-{}", version))
+        .join(binary_name);
 
     // Return cached binary if exists
     if cached_binary.exists() {
@@ -65,7 +67,7 @@ fn get_tark_binary() -> PathBuf {
 }
 
 /// Download tark binary from GitHub releases
-fn download_tark_binary(cache_dir: &PathBuf, version: &str) -> PathBuf {
+fn download_tark_binary(cache_dir: &Path, version: &str) -> PathBuf {
     let (os, arch) = get_platform();
 
     // Binary naming: tark-{os}-{arch} (no extension on Unix, .exe on Windows)
@@ -143,7 +145,7 @@ fn get_platform() -> (&'static str, &'static str) {
     (os, arch)
 }
 
-fn download_file(url: &str, dest: &PathBuf) {
+fn download_file(url: &str, dest: &Path) {
     // Use curl or wget
     let status = Command::new("curl")
         .args(["-fL", "-o", dest.to_str().unwrap(), url])
@@ -156,7 +158,7 @@ fn download_file(url: &str, dest: &PathBuf) {
             let wget_status = Command::new("wget")
                 .args(["-O", dest.to_str().unwrap(), url])
                 .status();
-            
+
             if wget_status.map(|s| !s.success()).unwrap_or(true) {
                 panic!("Failed to download {} with curl or wget", url);
             }
@@ -165,7 +167,7 @@ fn download_file(url: &str, dest: &PathBuf) {
 }
 
 /// Run tark command and capture output
-fn run_tark(binary: &PathBuf, args: &[&str]) -> (bool, String, String) {
+fn run_tark(binary: &Path, args: &[&str]) -> (bool, String, String) {
     let output = Command::new(binary)
         .args(args)
         .output()
@@ -175,6 +177,31 @@ fn run_tark(binary: &PathBuf, args: &[&str]) -> (bool, String, String) {
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
     (output.status.success(), stdout, stderr)
+}
+
+/// Returns false (and prints a skip hint) if the selected `tark` binary does not
+/// support the `plugin` subcommand (older releases).
+fn require_plugin_subcommand_or_skip(binary: &Path) -> bool {
+    let (success, _stdout, stderr) = run_tark(binary, &["plugin", "--help"]);
+    if success {
+        return true;
+    }
+
+    let stderr_lc = stderr.to_lowercase();
+    if stderr_lc.contains("unrecognized subcommand")
+        && (stderr_lc.contains("'plugin'") || stderr_lc.contains("\"plugin\""))
+    {
+        eprintln!(
+            "Skipping: this tark binary does not support `tark plugin ...`.\n\
+             Set TARK_BINARY to a newer local build, or set TARK_VERSION to a release that includes plugin support.\n\
+             stderr: {}",
+            stderr.trim()
+        );
+        return false;
+    }
+
+    // If it failed for another reason, we assume plugin support exists and let tests assert.
+    true
 }
 
 /// Get the plugin directory (dist/ in this repo)
@@ -194,13 +221,19 @@ fn test_tark_binary_available() {
 
     let (success, stdout, _) = run_tark(&binary, &["--version"]);
     assert!(success, "tark --version should succeed");
-    assert!(stdout.contains("tark") || stdout.contains("0."), "Should show version");
+    assert!(
+        stdout.contains("tark") || stdout.contains("0."),
+        "Should show version"
+    );
     println!("✓ Tark version: {}", stdout.trim());
 }
 
 #[test]
 fn test_plugin_install() {
     let binary = get_tark_binary();
+    if !require_plugin_subcommand_or_skip(&binary) {
+        return;
+    }
     let plugin_dir = get_plugin_dir();
 
     // Verify plugin files exist
@@ -214,10 +247,8 @@ fn test_plugin_install() {
     );
 
     // Install the plugin
-    let (success, stdout, stderr) = run_tark(
-        &binary,
-        &["plugin", "add", plugin_dir.to_str().unwrap()],
-    );
+    let (success, stdout, stderr) =
+        run_tark(&binary, &["plugin", "add", plugin_dir.to_str().unwrap()]);
 
     // May already be installed, which is fine
     if !success && !stderr.contains("already") {
@@ -230,6 +261,9 @@ fn test_plugin_install() {
 #[test]
 fn test_plugin_appears_in_list() {
     let binary = get_tark_binary();
+    if !require_plugin_subcommand_or_skip(&binary) {
+        return;
+    }
 
     // First ensure plugin is installed
     let plugin_dir = get_plugin_dir();
@@ -249,6 +283,9 @@ fn test_plugin_appears_in_list() {
 #[test]
 fn test_plugin_provider_type() {
     let binary = get_tark_binary();
+    if !require_plugin_subcommand_or_skip(&binary) {
+        return;
+    }
 
     // List plugins
     let (success, stdout, _) = run_tark(&binary, &["plugin", "list"]);
@@ -302,6 +339,9 @@ mod scenarios {
     fn scenario_fresh_install_from_github() {
         // Given: Tark binary from GitHub releases
         let binary = get_tark_binary();
+        if !require_plugin_subcommand_or_skip(&binary) {
+            return;
+        }
 
         // When: Installing the gemini-oauth plugin
         let plugin_dir = get_plugin_dir();

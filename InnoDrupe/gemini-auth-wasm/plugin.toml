@@ -33,6 +33,14 @@ env = [
     "GEMINI_OAUTH_CLIENT_SECRET"
 ]
 
+# Filesystem read access for extracting Gemini CLI OAuth credentials
+# These are needed to dynamically read the client_id/client_secret from Gemini CLI installation
+fs_read = [
+    "~/.gemini/oauth_creds.json",
+    "/usr/local/lib/node_modules/@google/gemini-cli/node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js",
+    "/usr/lib/node_modules/@google/gemini-cli/node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js",
+]
+
 # No shell access needed
 shell = false
 
