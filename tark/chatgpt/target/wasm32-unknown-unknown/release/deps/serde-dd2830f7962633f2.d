@@ -1,0 +1,14 @@
+/home/dev/data/work/code/plugins/tark/chatgpt/target/wasm32-unknown-unknown/release/deps/serde-dd2830f7962633f2.d: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/dev/data/work/code/plugins/tark/chatgpt/target/wasm32-unknown-unknown/release/build/serde-715e554c635768ae/out/private.rs
+
+/home/dev/data/work/code/plugins/tark/chatgpt/target/wasm32-unknown-unknown/release/deps/libserde-dd2830f7962633f2.rlib: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/dev/data/work/code/plugins/tark/chatgpt/target/wasm32-unknown-unknown/release/build/serde-715e554c635768ae/out/private.rs
+
+/home/dev/data/work/code/plugins/tark/chatgpt/target/wasm32-unknown-unknown/release/deps/libserde-dd2830f7962633f2.rmeta: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/dev/data/work/code/plugins/tark/chatgpt/target/wasm32-unknown-unknown/release/build/serde-715e554c635768ae/out/private.rs
+
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/home/dev/data/work/code/plugins/tark/chatgpt/target/wasm32-unknown-unknown/release/build/serde-715e554c635768ae/out/private.rs:
+
+# env-dep:OUT_DIR=/home/dev/data/work/code/plugins/tark/chatgpt/target/wasm32-unknown-unknown/release/build/serde-715e554c635768ae/out

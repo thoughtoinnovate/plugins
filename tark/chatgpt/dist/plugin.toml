@@ -13,13 +13,20 @@ api_version = "0.1"
 # OAuth2 configuration
 [oauth]
 flow = "pkce"
-auth_url = "https://auth.openai.com/authorize"
+auth_url = "https://auth.openai.com/oauth/authorize"
 token_url = "https://auth.openai.com/oauth/token"
 client_id = "app_EMoamEEZ73f0CkXaXp7hrann"
 scopes = ["openid", "profile", "email", "offline_access"]
 redirect_uri = "http://localhost:8888/callback"
 credentials_path = "~/.config/tark/chatgpt_oauth.json"
 process_tokens_callback = "auth_process_tokens"
+use_state = true
+
+# OpenAI-specific parameters required for Codex CLI flow
+[oauth.extra_params]
+originator = "opencode"
+id_token_add_organizations = "true"
+codex_cli_simplified_flow = "true"
 
 # Capabilities required by this plugin
 [capabilities]
