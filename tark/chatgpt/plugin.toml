@@ -1,0 +1,57 @@
+# ChatGPT OAuth Provider Plugin Manifest
+# Auth-only plugin for ChatGPT Pro/Plus users (Codex models)
+
+[plugin]
+name = "chatgpt-oauth"
+version = "0.2.0"
+description = "ChatGPT Pro/Plus OAuth authentication for Codex models"
+author = "tark contributors"
+homepage = "https://github.com/tark-ai/tark"
+type = "provider"
+api_version = "0.1"
+
+# OAuth2 configuration
+[oauth]
+flow = "pkce"
+auth_url = "https://auth.openai.com/authorize"
+token_url = "https://auth.openai.com/oauth/token"
+client_id = "app_EMoamEEZ73f0CkXaXp7hrann"
+scopes = ["openid", "profile", "email", "offline_access"]
+redirect_uri = "http://localhost:8888/callback"
+credentials_path = "~/.config/tark/chatgpt_oauth.json"
+process_tokens_callback = "auth_process_tokens"
+
+# Capabilities required by this plugin
+[capabilities]
+# Persist tokens and credentials
+storage = true
+
+# HTTP access for token refresh and Codex API
+http = [
+    "auth.openai.com",
+    "chatgpt.com"
+]
+
+# Environment variables
+env = [
+    "HOME",
+    "CHATGPT_OAUTH_CREDENTIALS_PATH"
+]
+
+# Filesystem read access for credentials file
+fs_read = [
+    "~/.config/tark/chatgpt_oauth.json"
+]
+
+# No shell access needed
+shell = false
+
+# Plugin contributions
+[contributes]
+providers = [
+    { id = "chatgpt-oauth", name = "ChatGPT (OAuth)", description = "ChatGPT Pro/Plus via Codex API", base_provider = "openai" }
+]
+
+# Activation events
+[activation]
+events = ["onProvider:chatgpt-oauth"]
