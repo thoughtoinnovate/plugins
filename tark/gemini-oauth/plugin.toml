@@ -1,0 +1,55 @@
+# Gemini OAuth Provider Plugin Manifest
+# Full LLM provider using Gemini CLI OAuth credentials with Cloud Code Assist API
+
+[plugin]
+name = "gemini-oauth"
+version = "0.2.0"
+description = "Gemini LLM provider (supports GEMINI_API_KEY or OAuth)"
+author = "tark contributors"
+homepage = "https://github.com/tark-ai/tark"
+type = "provider"
+api_version = "0.1"
+
+# Capabilities required by this plugin
+[capabilities]
+# Persist tokens and credentials
+storage = true
+
+# HTTP access for token refresh and Gemini APIs
+http = [
+    "oauth2.googleapis.com",
+    "cloudcode-pa.googleapis.com",
+    "generativelanguage.googleapis.com"
+]
+
+# Environment variables to check for project ID and API key
+env = [
+    "GOOGLE_CLOUD_PROJECT",
+    "GCLOUD_PROJECT",
+    "GCP_PROJECT",
+    "HOME",
+    "GEMINI_API_KEY",
+    "GEMINI_OAUTH_CLIENT_ID",
+    "GEMINI_OAUTH_CLIENT_SECRET"
+]
+
+# Filesystem read access for extracting Gemini CLI OAuth credentials
+# These are needed to dynamically read the client_id/client_secret from Gemini CLI installation
+fs_read = [
+    "~/.gemini/oauth_creds.json",
+    "/usr/local/lib/node_modules/@google/gemini-cli/node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js",
+    "/usr/lib/node_modules/@google/gemini-cli/node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js",
+]
+
+# No shell access needed
+shell = false
+
+# Plugin contributions
+[contributes]
+providers = [
+    { id = "gemini-oauth", name = "Gemini (OAuth/Key)", description = "Uses GEMINI_API_KEY or OAuth credentials", base_provider = "google" }
+]
+
+# Activation events
+[activation]
+events = ["onProvider:gemini-oauth"]

@@ -1,0 +1,27 @@
+[package]
+name = "tark-plugin-gemini-auth-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "Gemini OAuth WASM plugin for tark - uses Gemini CLI credentials"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+# Don't run tests on the lib (it's WASM-only)
+test = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+dirs = "5"
+
+# Integration tests run separately from the lib
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+
+[profile.release]
+opt-level = "s"
+lto = true
