@@ -131,6 +131,13 @@ struct OAuthTokens {
     expires_at: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrivateMode {
+    DmOnly,
+    Ephemeral,
+    Off,
+}
+
 #[derive(Debug, Deserialize)]
 struct HttpResponse {
     status: u16,
@@ -245,6 +252,17 @@ fn get_bot_token() -> Option<String> {
         return Some(token);
     }
     env_get("DISCORD_BOT_TOKEN")
+}
+
+fn private_mode() -> PrivateMode {
+    let value = env_get("DISCORD_PRIVATE_MODE")
+        .unwrap_or_else(|| "dm".to_string())
+        .to_lowercase();
+    match value.as_str() {
+        "ephemeral" => PrivateMode::Ephemeral,
+        "off" => PrivateMode::Off,
+        _ => PrivateMode::DmOnly,
+    }
 }
 
 fn load_oauth_token() -> Option<(String, String, bool)> {
@@ -512,9 +530,6 @@ pub extern "C" fn channel_handle_webhook(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    if !interaction_token.is_empty() {
-        store_interaction_token(&channel_id, &interaction_token);
-    }
 
     if let Some(app_id) = payload.get("application_id").and_then(Value::as_str) {
         storage_set("discord_application_id", app_id);
@@ -525,8 +540,28 @@ pub extern "C" fn channel_handle_webhook(
         .get("guild_id")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let mode = private_mode();
+    let is_guild = guild_id.is_some();
+    if is_guild && mode == PrivateMode::DmOnly {
+        let response = WebhookResponse {
+            status: 200,
+            headers: vec![("Content-Type".to_string(), "application/json".to_string())],
+            body: "{\"type\":4,\"data\":{\"content\":\"Please DM the bot to use Tark privately.\",\"flags\":64}}".to_string(),
+            messages: vec![],
+        };
+        return respond_json(&response, ret_ptr);
+    }
 
     let (text, command) = extract_command(&payload);
+    let conversation_id = if is_guild {
+        format!("{}:{}", channel_id, user_id)
+    } else {
+        channel_id.clone()
+    };
+    if !interaction_token.is_empty() {
+        store_interaction_token(&conversation_id, &interaction_token);
+    }
+    let ephemeral = is_guild && mode == PrivateMode::Ephemeral;
     let metadata = serde_json::json!({
         "discord": {
             "user_id": user_id.clone(),
@@ -534,21 +569,27 @@ pub extern "C" fn channel_handle_webhook(
             "guild_id": guild_id.clone(),
             "roles": roles,
             "interaction_token": interaction_token,
+            "ephemeral": ephemeral
         },
         "tark_command": command
     });
 
     let inbound = InboundMessage {
-        conversation_id: channel_id.clone(),
+        conversation_id: conversation_id.clone(),
         user_id,
         text,
         metadata_json: metadata.to_string(),
     };
 
+    let response_body = if ephemeral {
+        "{\"type\":5,\"data\":{\"flags\":64}}".to_string()
+    } else {
+        "{\"type\":5}".to_string()
+    };
     let response = WebhookResponse {
         status: 200,
         headers: vec![("Content-Type".to_string(), "application/json".to_string())],
-        body: "{\"type\":5}".to_string(),
+        body: response_body,
         messages: vec![inbound],
     };
     respond_json(&response, ret_ptr)
@@ -576,6 +617,11 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
         .get("message_id")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let metadata_json = request
+        .get("metadata_json")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let (channel_id_override, ephemeral) = parse_send_metadata(metadata_json);
 
     let app_id = match get_application_id() {
         Some(id) => id,
@@ -599,7 +645,13 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
                 app_id, token
             )
         };
-        let body = serde_json::json!({ "content": text }).to_string();
+        let mut payload = serde_json::json!({ "content": text });
+        if ephemeral {
+            if let Value::Object(map) = &mut payload {
+                map.insert("flags".to_string(), Value::Number(64.into()));
+            }
+        }
+        let body = payload.to_string();
         let headers = vec![("Content-Type".to_string(), "application/json".to_string())];
         if let Some(resp) = http_post(&url, &body, &headers) {
             let msg_id = extract_message_id(&resp.body);
@@ -612,16 +664,26 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
         }
     }
 
+    if ephemeral {
+        return write_string(
+            ret_ptr,
+            "{\"success\":false,\"error\":\"ephemeral response requires interaction token\"}",
+        );
+    }
+
     if let Some(bot_token) = get_bot_token() {
+        let channel_id = channel_id_override
+            .clone()
+            .unwrap_or_else(|| conversation_id.clone());
         let url = if let Some(ref msg_id) = message_id {
             format!(
                 "https://discord.com/api/v10/channels/{}/messages/{}",
-                conversation_id, msg_id
+                channel_id, msg_id
             )
         } else {
             format!(
                 "https://discord.com/api/v10/channels/{}/messages",
-                conversation_id
+                channel_id
             )
         };
         let body = serde_json::json!({ "content": text }).to_string();
@@ -647,15 +709,18 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
                 "{\"success\":false,\"error\":\"oauth token expired\"}",
             );
         }
+        let channel_id = channel_id_override
+            .clone()
+            .unwrap_or_else(|| conversation_id.clone());
         let url = if let Some(ref msg_id) = message_id {
             format!(
                 "https://discord.com/api/v10/channels/{}/messages/{}",
-                conversation_id, msg_id
+                channel_id, msg_id
             )
         } else {
             format!(
                 "https://discord.com/api/v10/channels/{}/messages",
-                conversation_id
+                channel_id
             )
         };
         let body = serde_json::json!({ "content": text }).to_string();
@@ -681,6 +746,28 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
         ret_ptr,
         "{\"success\":false,\"error\":\"no valid send token\"}",
     )
+}
+
+fn parse_send_metadata(metadata_json: &str) -> (Option<String>, bool) {
+    if metadata_json.trim().is_empty() {
+        return (None, false);
+    }
+    let value: Value = match serde_json::from_str(metadata_json) {
+        Ok(v) => v,
+        Err(_) => return (None, false),
+    };
+    let discord = value
+        .get("discord")
+        .and_then(Value::as_object);
+    let channel_id = discord
+        .and_then(|d| d.get("channel_id"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let ephemeral = discord
+        .and_then(|d| d.get("ephemeral"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    (channel_id, ephemeral)
 }
 
 // =============================================================================
