@@ -2,7 +2,7 @@
 
 [plugin]
 name = "discord"
-version = "0.2.1"
+version = "0.2.2"
 description = "Discord channel integration (gateway DM + interactions)"
 author = "tark contributors"
 homepage = "https://github.com/tark-ai/tark"
@@ -12,7 +12,7 @@ wasm = "dist/plugin.wasm"
 
 [capabilities]
 storage = true
-http = ["discord.com", "discordapp.com", "discord.gg"]
+http = ["discord.com", "discordapp.com", "discord.gg", "gateway.discord.gg"]
 env = [
     "DISCORD_PUBLIC_KEY",
     "DISCORD_APPLICATION_ID",
