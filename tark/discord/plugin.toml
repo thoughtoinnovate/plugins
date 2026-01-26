@@ -8,6 +8,7 @@ author = "tark contributors"
 homepage = "https://github.com/tark-ai/tark"
 type = "channel"
 api_version = "0.1"
+wasm = "dist/plugin.wasm"
 
 [capabilities]
 storage = true
