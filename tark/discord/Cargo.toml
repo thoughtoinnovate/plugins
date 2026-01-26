@@ -1,0 +1,20 @@
+[package]
+name = "tark-plugin-discord-channel"
+version = "0.1.0"
+edition = "2021"
+description = "Discord channel WASM plugin for tark (interactions-only)"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+test = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+hex = "0.4"
+
+[profile.release]
+opt-level = "s"
+lto = true

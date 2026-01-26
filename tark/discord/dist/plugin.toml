@@ -1,0 +1,38 @@
+# Discord Channel Plugin Manifest
+
+[plugin]
+name = "discord"
+version = "0.1.0"
+description = "Discord channel integration (interactions-only)"
+author = "tark contributors"
+homepage = "https://github.com/tark-ai/tark"
+type = "channel"
+api_version = "0.1"
+
+[capabilities]
+storage = true
+http = ["discord.com", "discordapp.com"]
+env = [
+    "DISCORD_PUBLIC_KEY",
+    "DISCORD_APPLICATION_ID",
+    "DISCORD_CLIENT_ID",
+    "DISCORD_CLIENT_SECRET",
+    "DISCORD_BOT_TOKEN",
+    "DISCORD_REDIRECT_URI"
+]
+shell = false
+
+[contributes]
+channels = [
+    { id = "discord", name = "Discord", description = "Discord interactions channel" }
+]
+
+[oauth]
+flow = "pkce"
+auth_url = "https://discord.com/oauth2/authorize"
+token_url = "https://discord.com/api/oauth2/token"
+client_id = "${DISCORD_CLIENT_ID}"
+client_secret = "${DISCORD_CLIENT_SECRET}"
+scopes = ["applications.commands", "bot"]
+redirect_uri = "${DISCORD_REDIRECT_URI}"
+credentials_path = "~/.config/tark/discord_oauth.json"
