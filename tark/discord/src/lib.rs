@@ -1241,9 +1241,16 @@ fn gateway_poll() -> Vec<InboundMessage> {
         };
 
         if resp.closed.unwrap_or(false) {
-            log_info("gateway closed by remote");
+            if let Some(err) = resp.error.as_ref() {
+                log_error(&format!("gateway closed by remote: {}", err));
+            } else {
+                log_info("gateway closed by remote");
+            }
             reset_gateway(&mut state);
             break;
+        }
+        if let Some(err) = resp.error.as_ref() {
+            log_error(&format!("gateway recv error: {}", err));
         }
         if let Some(msg) = resp.message {
             if let Ok(payload) = serde_json::from_str::<Value>(&msg) {
