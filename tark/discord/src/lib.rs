@@ -123,6 +123,15 @@ struct InteractionToken {
 }
 
 #[derive(Debug, Deserialize)]
+struct OAuthTokens {
+    access_token: String,
+    #[serde(default)]
+    token_type: Option<String>,
+    #[serde(default)]
+    expires_at: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
 struct HttpResponse {
     status: u16,
     headers: Vec<(String, String)>,
@@ -236,6 +245,17 @@ fn get_bot_token() -> Option<String> {
         return Some(token);
     }
     env_get("DISCORD_BOT_TOKEN")
+}
+
+fn load_oauth_token() -> Option<(String, String, bool)> {
+    let payload = storage_get("discord_oauth_tokens")?;
+    let tokens: OAuthTokens = serde_json::from_str(&payload).ok()?;
+    let token_type = tokens.token_type.unwrap_or_else(|| "Bearer".to_string());
+    let expired = tokens
+        .expires_at
+        .map(|ts| now_ts() >= ts)
+        .unwrap_or(false);
+    Some((tokens.access_token, token_type, expired))
 }
 
 fn store_interaction_token(channel_id: &str, token: &str) {
@@ -364,11 +384,22 @@ pub extern "C" fn channel_stop() -> i32 {
 
 #[no_mangle]
 pub extern "C" fn channel_auth_status() -> i32 {
-    if get_public_key().is_some() {
-        1 // authenticated
-    } else {
-        2 // not authenticated
+    if get_public_key().is_none() {
+        return 2;
     }
+
+    if get_bot_token().is_some() {
+        return 1;
+    }
+
+    if let Some((_, _, expired)) = load_oauth_token() {
+        if expired {
+            return 3;
+        }
+        return 1;
+    }
+
+    2
 }
 
 #[no_mangle]
@@ -597,6 +628,43 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
         let headers = vec![
             ("Content-Type".to_string(), "application/json".to_string()),
             ("Authorization".to_string(), format!("Bot {}", bot_token)),
+        ];
+        if let Some(resp) = http_post(&url, &body, &headers) {
+            let msg_id = extract_message_id(&resp.body);
+            let response = serde_json::json!({
+                "success": resp.status >= 200 && resp.status < 300,
+                "message_id": msg_id,
+                "error": if resp.status >= 200 && resp.status < 300 { Value::Null } else { Value::String(resp.body) }
+            });
+            return write_string(ret_ptr, &response.to_string());
+        }
+    }
+
+    if let Some((access_token, token_type, expired)) = load_oauth_token() {
+        if expired {
+            return write_string(
+                ret_ptr,
+                "{\"success\":false,\"error\":\"oauth token expired\"}",
+            );
+        }
+        let url = if let Some(ref msg_id) = message_id {
+            format!(
+                "https://discord.com/api/v10/channels/{}/messages/{}",
+                conversation_id, msg_id
+            )
+        } else {
+            format!(
+                "https://discord.com/api/v10/channels/{}/messages",
+                conversation_id
+            )
+        };
+        let body = serde_json::json!({ "content": text }).to_string();
+        let headers = vec![
+            ("Content-Type".to_string(), "application/json".to_string()),
+            (
+                "Authorization".to_string(),
+                format!("{} {}", token_type, access_token),
+            ),
         ];
         if let Some(resp) = http_post(&url, &body, &headers) {
             let msg_id = extract_message_id(&resp.body);
