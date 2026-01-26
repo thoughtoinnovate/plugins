@@ -131,10 +131,20 @@ struct OAuthTokens {
     expires_at: Option<u64>,
 }
 
+#[derive(Debug, Clone)]
+struct DiscordConfig {
+    application_id: String,
+    public_key: String,
+    bot_token: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrivateMode {
     DmOnly,
 }
+
+static CONFIG_CACHE: std::sync::Mutex<Option<DiscordConfig>> = std::sync::Mutex::new(None);
+static TOKEN_CACHE: std::sync::Mutex<Option<OAuthTokens>> = std::sync::Mutex::new(None);
 
 #[derive(Debug, Deserialize)]
 struct HttpResponse {
@@ -232,6 +242,11 @@ fn now_ts() -> u64 {
 }
 
 fn get_application_id() -> Option<String> {
+    if let Ok(guard) = CONFIG_CACHE.lock() {
+        if let Some(cfg) = guard.as_ref() {
+            return Some(cfg.application_id.clone());
+        }
+    }
     if let Some(app) = storage_get("discord_application_id") {
         return Some(app);
     }
@@ -239,6 +254,11 @@ fn get_application_id() -> Option<String> {
 }
 
 fn get_public_key() -> Option<String> {
+    if let Ok(guard) = CONFIG_CACHE.lock() {
+        if let Some(cfg) = guard.as_ref() {
+            return Some(cfg.public_key.clone());
+        }
+    }
     if let Some(key) = storage_get("discord_public_key") {
         return Some(key);
     }
@@ -246,6 +266,13 @@ fn get_public_key() -> Option<String> {
 }
 
 fn get_bot_token() -> Option<String> {
+    if let Ok(guard) = CONFIG_CACHE.lock() {
+        if let Some(cfg) = guard.as_ref() {
+            if let Some(token) = cfg.bot_token.as_ref() {
+                return Some(token.clone());
+            }
+        }
+    }
     if let Some(token) = storage_get("discord_bot_token") {
         return Some(token);
     }
@@ -257,6 +284,16 @@ fn private_mode() -> PrivateMode {
 }
 
 fn load_oauth_token() -> Option<(String, String, bool)> {
+    if let Ok(guard) = TOKEN_CACHE.lock() {
+        if let Some(tokens) = guard.as_ref() {
+            let token_type = tokens.token_type.clone().unwrap_or_else(|| "Bearer".to_string());
+            let expired = tokens
+                .expires_at
+                .map(|ts| now_ts() >= ts)
+                .unwrap_or(false);
+            return Some((tokens.access_token.clone(), token_type, expired));
+        }
+    }
     let payload = storage_get("discord_oauth_tokens")?;
     let tokens: OAuthTokens = serde_json::from_str(&payload).ok()?;
     let token_type = tokens.token_type.unwrap_or_else(|| "Bearer".to_string());
@@ -416,37 +453,40 @@ pub extern "C" fn channel_auth_init(ptr: i32, len: i32) -> i32 {
     let payload = read_string(ptr, len);
     if let Ok(value) = serde_json::from_str::<Value>(&payload) {
         if let Some(cfg) = value.get("config").and_then(Value::as_object) {
-            if let Some(app_id) = cfg.get("application_id").and_then(Value::as_str) {
-                storage_set("discord_application_id", app_id);
-            }
-            if let Some(public_key) = cfg.get("public_key").and_then(Value::as_str) {
-                storage_set("discord_public_key", public_key);
-            }
-            if let Some(bot_token) = cfg.get("bot_token").and_then(Value::as_str) {
-                storage_set("discord_bot_token", bot_token);
+            let app_id = cfg.get("application_id").and_then(Value::as_str);
+            let public_key = cfg.get("public_key").and_then(Value::as_str);
+            let bot_token = cfg.get("bot_token").and_then(Value::as_str);
+            if let (Some(app_id), Some(public_key)) = (app_id, public_key) {
+                if let Ok(mut guard) = CONFIG_CACHE.lock() {
+                    *guard = Some(DiscordConfig {
+                        application_id: app_id.to_string(),
+                        public_key: public_key.to_string(),
+                        bot_token: bot_token.map(str::to_string),
+                    });
+                }
             }
         }
 
         if let Some(tokens) = value.get("tokens") {
-            if let Ok(tokens_json) = serde_json::to_string(tokens) {
-                storage_set("discord_oauth_tokens", &tokens_json);
+            if let Ok(tokens_value) = serde_json::from_value::<OAuthTokens>(tokens.clone()) {
+                if let Ok(mut guard) = TOKEN_CACHE.lock() {
+                    *guard = Some(tokens_value);
+                }
             }
             return 0;
         }
 
         if value.get("access_token").is_some() {
-            if let Ok(tokens_json) = serde_json::to_string(&value) {
-                storage_set("discord_oauth_tokens", &tokens_json);
+            if let Ok(tokens_value) = serde_json::from_value::<OAuthTokens>(value.clone()) {
+                if let Ok(mut guard) = TOKEN_CACHE.lock() {
+                    *guard = Some(tokens_value);
+                }
             }
             return 0;
         }
     }
 
-    if storage_set("discord_oauth_tokens", &payload) {
-        0
-    } else {
-        -1
-    }
+    -1
 }
 
 #[no_mangle]
