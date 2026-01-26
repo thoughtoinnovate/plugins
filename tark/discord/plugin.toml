@@ -37,3 +37,6 @@ client_secret = "${DISCORD_CLIENT_SECRET}"
 scopes = ["applications.commands", "bot"]
 redirect_uri = "http://localhost:8888/callback"
 credentials_path = "~/.config/tark/discord_oauth.json"
+
+[oauth.extra_params]
+permissions = "0"
