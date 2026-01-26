@@ -134,8 +134,6 @@ struct OAuthTokens {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrivateMode {
     DmOnly,
-    Ephemeral,
-    Off,
 }
 
 #[derive(Debug, Deserialize)]
@@ -255,14 +253,7 @@ fn get_bot_token() -> Option<String> {
 }
 
 fn private_mode() -> PrivateMode {
-    let value = env_get("DISCORD_PRIVATE_MODE")
-        .unwrap_or_else(|| "dm".to_string())
-        .to_lowercase();
-    match value.as_str() {
-        "ephemeral" => PrivateMode::Ephemeral,
-        "off" => PrivateMode::Off,
-        _ => PrivateMode::DmOnly,
-    }
+    PrivateMode::DmOnly
 }
 
 fn load_oauth_token() -> Option<(String, String, bool)> {
@@ -561,7 +552,7 @@ pub extern "C" fn channel_handle_webhook(
     if !interaction_token.is_empty() {
         store_interaction_token(&conversation_id, &interaction_token);
     }
-    let ephemeral = is_guild && mode == PrivateMode::Ephemeral;
+    let ephemeral = false;
     let metadata = serde_json::json!({
         "discord": {
             "user_id": user_id.clone(),
