@@ -615,6 +615,12 @@ pub extern "C" fn channel_auth_init(ptr: i32, len: i32) -> i32 {
                     });
                     config_set = true;
                 }
+                // Persist config for future loads.
+                storage_set("discord_application_id", app_id);
+                storage_set("discord_public_key", public_key);
+                if let Some(token) = bot_token {
+                    storage_set("discord_bot_token", token);
+                }
             }
         }
 
@@ -623,6 +629,9 @@ pub extern "C" fn channel_auth_init(ptr: i32, len: i32) -> i32 {
                 if let Ok(mut guard) = TOKEN_CACHE.lock() {
                     *guard = Some(tokens_value);
                 }
+            }
+            if let Ok(raw) = serde_json::to_string(tokens) {
+                storage_set("discord_oauth_tokens", &raw);
             }
             return 0;
         }
@@ -633,6 +642,7 @@ pub extern "C" fn channel_auth_init(ptr: i32, len: i32) -> i32 {
                     *guard = Some(tokens_value);
                 }
             }
+            storage_set("discord_oauth_tokens", &payload);
             return 0;
         }
 
