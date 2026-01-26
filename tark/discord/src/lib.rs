@@ -502,6 +502,19 @@ pub extern "C" fn channel_auth_logout() -> i32 {
 }
 
 #[no_mangle]
+pub extern "C" fn channel_handle_gateway_event(ptr: i32, len: i32, ret_ptr: i32) -> i32 {
+    let payload = read_string(ptr, len);
+    let messages = match serde_json::from_str::<Value>(&payload) {
+        Ok(value) => parse_gateway_event(&value),
+        Err(_) => Vec::new(),
+    };
+    match serde_json::to_string(&messages) {
+        Ok(json) => write_string(ret_ptr, &json),
+        Err(_) => -1,
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn channel_handle_webhook(
     req_ptr: i32,
     req_len: i32,
@@ -899,4 +912,122 @@ fn extract_command(payload: &Value) -> (String, Value) {
 fn extract_message_id(body: &str) -> Option<String> {
     let value: Value = serde_json::from_str(body).ok()?;
     value.get("id").and_then(Value::as_str).map(str::to_string)
+}
+
+fn parse_gateway_event(payload: &Value) -> Vec<InboundMessage> {
+    let event_type = payload.get("t").and_then(Value::as_str).unwrap_or("");
+    let data = payload.get("d").unwrap_or(&Value::Null);
+    match event_type {
+        "MESSAGE_CREATE" => parse_gateway_message_create(data),
+        "INTERACTION_CREATE" => parse_gateway_interaction_create(data),
+        _ => Vec::new(),
+    }
+}
+
+fn parse_gateway_message_create(data: &Value) -> Vec<InboundMessage> {
+    if data.get("guild_id").is_some() {
+        return Vec::new();
+    }
+
+    let channel_type = data.get("channel_type").and_then(Value::as_i64).unwrap_or(0);
+    if channel_type != 1 {
+        return Vec::new();
+    }
+
+    let author = match data.get("author") {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
+    if author.get("bot").and_then(Value::as_bool).unwrap_or(false) {
+        return Vec::new();
+    }
+
+    let content = data
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if content.is_empty() {
+        return Vec::new();
+    }
+
+    let channel_id = data
+        .get("channel_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    let user_id = author
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+
+    let metadata = serde_json::json!({
+        "discord": {
+            "user_id": user_id.clone(),
+            "channel_id": channel_id.clone(),
+            "guild_id": null,
+            "roles": [],
+            "interaction_token": "",
+            "ephemeral": false
+        }
+    });
+
+    vec![InboundMessage {
+        conversation_id: channel_id,
+        user_id,
+        text: content.to_string(),
+        metadata_json: metadata.to_string(),
+    }]
+}
+
+fn parse_gateway_interaction_create(data: &Value) -> Vec<InboundMessage> {
+    if data.get("guild_id").is_some() {
+        return Vec::new();
+    }
+
+    let channel_id = data
+        .get("channel_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    let interaction_token = data
+        .get("token")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+
+    if let Some(app_id) = data.get("application_id").and_then(Value::as_str) {
+        storage_set("discord_application_id", app_id);
+    }
+
+    let (user_id, roles) = extract_user_and_roles(data);
+    let (text, command) = extract_command(data);
+    let conversation_id = channel_id.clone();
+    if !interaction_token.is_empty() {
+        store_interaction_token(&conversation_id, &interaction_token);
+    }
+
+    let metadata = serde_json::json!({
+        "discord": {
+            "user_id": user_id.clone(),
+            "channel_id": channel_id.clone(),
+            "guild_id": null,
+            "roles": roles,
+            "interaction_token": interaction_token,
+            "ephemeral": false
+        },
+        "tark_command": command
+    });
+
+    if text.trim().is_empty() {
+        return Vec::new();
+    }
+
+    vec![InboundMessage {
+        conversation_id,
+        user_id,
+        text,
+        metadata_json: metadata.to_string(),
+    }]
 }
