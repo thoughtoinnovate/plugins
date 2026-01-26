@@ -414,6 +414,34 @@ pub extern "C" fn channel_auth_status() -> i32 {
 #[no_mangle]
 pub extern "C" fn channel_auth_init(ptr: i32, len: i32) -> i32 {
     let payload = read_string(ptr, len);
+    if let Ok(value) = serde_json::from_str::<Value>(&payload) {
+        if let Some(cfg) = value.get("config").and_then(Value::as_object) {
+            if let Some(app_id) = cfg.get("application_id").and_then(Value::as_str) {
+                storage_set("discord_application_id", app_id);
+            }
+            if let Some(public_key) = cfg.get("public_key").and_then(Value::as_str) {
+                storage_set("discord_public_key", public_key);
+            }
+            if let Some(bot_token) = cfg.get("bot_token").and_then(Value::as_str) {
+                storage_set("discord_bot_token", bot_token);
+            }
+        }
+
+        if let Some(tokens) = value.get("tokens") {
+            if let Ok(tokens_json) = serde_json::to_string(tokens) {
+                storage_set("discord_oauth_tokens", &tokens_json);
+            }
+            return 0;
+        }
+
+        if value.get("access_token").is_some() {
+            if let Ok(tokens_json) = serde_json::to_string(&value) {
+                storage_set("discord_oauth_tokens", &tokens_json);
+            }
+            return 0;
+        }
+    }
+
     if storage_set("discord_oauth_tokens", &payload) {
         0
     } else {
