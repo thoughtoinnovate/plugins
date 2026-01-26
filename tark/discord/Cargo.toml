@@ -1,6 +1,6 @@
 [package]
 name = "tark-plugin-discord-channel"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 description = "Discord channel WASM plugin for tark (gateway DM + interactions)"
 license = "MIT"

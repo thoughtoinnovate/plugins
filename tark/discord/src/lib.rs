@@ -7,6 +7,7 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const DISCORD_GATEWAY_URL: &str = "wss://gateway.discord.gg/?v=10&encoding=json";
 const DISCORD_INTENTS_DM_ONLY: u64 = 1 | 4096 | 32768; // GUILDS + DIRECT_MESSAGES + MESSAGE_CONTENT
@@ -178,6 +179,8 @@ static STATS: std::sync::LazyLock<std::sync::Mutex<DiscordStats>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(DiscordStats::default()));
 static GATEWAY_STATE: std::sync::LazyLock<std::sync::Mutex<GatewayState>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(GatewayState::default()));
+static LOGGED_NO_TOKEN: AtomicBool = AtomicBool::new(false);
+static LOGGED_GATEWAY_CONNECT: AtomicBool = AtomicBool::new(false);
 
 #[derive(Default, Clone)]
 struct DiscordStats {
@@ -1143,6 +1146,7 @@ fn handle_gateway_payload(state: &mut GatewayState, payload: &Value, token: &str
             state.heartbeat_interval_ms = Some(interval_ms);
             state.last_heartbeat_ack = true;
             state.last_heartbeat = Some(Instant::now());
+            log_info(&format!("gateway HELLO (heartbeat={}ms)", interval_ms));
             let identify = serde_json::json!({
                 "op": 2,
                 "d": {
@@ -1161,8 +1165,10 @@ fn handle_gateway_payload(state: &mut GatewayState, payload: &Value, token: &str
         }
         11 => {
             state.last_heartbeat_ack = true;
+            log_info("gateway HEARTBEAT_ACK");
         }
         7 | 9 => {
+            log_info("gateway RECONNECT requested");
             reset_gateway(state);
         }
         0 => {
@@ -1172,6 +1178,7 @@ fn handle_gateway_payload(state: &mut GatewayState, payload: &Value, token: &str
                 "READY" => {
                     state.connected = true;
                     set_gateway_connected(true);
+                    log_info("gateway READY");
                 }
                 "MESSAGE_CREATE" => return parse_gateway_message_create(data),
                 "INTERACTION_CREATE" => return parse_gateway_interaction_create(data),
@@ -1187,7 +1194,12 @@ fn handle_gateway_payload(state: &mut GatewayState, payload: &Value, token: &str
 fn gateway_poll() -> Vec<InboundMessage> {
     let token = match get_bot_token() {
         Some(t) => t,
-        None => return Vec::new(),
+        None => {
+            if !LOGGED_NO_TOKEN.swap(true, Ordering::SeqCst) {
+                log_error("gateway unavailable: missing bot token");
+            }
+            return Vec::new();
+        }
     };
 
     let mut state = match GATEWAY_STATE.lock() {
@@ -1201,6 +1213,9 @@ fn gateway_poll() -> Vec<InboundMessage> {
                 state.handle = Some(handle);
                 state.connected = false;
                 set_gateway_connected(false);
+                if !LOGGED_GATEWAY_CONNECT.swap(true, Ordering::SeqCst) {
+                    log_info("gateway connected");
+                }
             }
             Err(err) => {
                 log_error(&format!("gateway connect failed: {}", err));
@@ -1226,6 +1241,7 @@ fn gateway_poll() -> Vec<InboundMessage> {
         };
 
         if resp.closed.unwrap_or(false) {
+            log_info("gateway closed by remote");
             reset_gateway(&mut state);
             break;
         }
@@ -1243,6 +1259,7 @@ fn gateway_poll() -> Vec<InboundMessage> {
         if let Some(last) = state.last_heartbeat {
             if last.elapsed() >= Duration::from_millis(interval_ms) {
                 if !state.last_heartbeat_ack {
+                    log_error("gateway HEARTBEAT missing ACK; resetting");
                     reset_gateway(&mut state);
                     return messages;
                 }
@@ -1254,6 +1271,7 @@ fn gateway_poll() -> Vec<InboundMessage> {
                     let _ = ws_send(handle, &heartbeat.to_string());
                     state.last_heartbeat = Some(Instant::now());
                     state.last_heartbeat_ack = false;
+                    log_info("gateway HEARTBEAT sent");
                 }
             }
         }
