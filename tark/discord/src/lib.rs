@@ -452,6 +452,7 @@ pub extern "C" fn channel_auth_status() -> i32 {
 pub extern "C" fn channel_auth_init(ptr: i32, len: i32) -> i32 {
     let payload = read_string(ptr, len);
     if let Ok(value) = serde_json::from_str::<Value>(&payload) {
+        let mut config_set = false;
         if let Some(cfg) = value.get("config").and_then(Value::as_object) {
             let app_id = cfg.get("application_id").and_then(Value::as_str);
             let public_key = cfg.get("public_key").and_then(Value::as_str);
@@ -463,6 +464,7 @@ pub extern "C" fn channel_auth_init(ptr: i32, len: i32) -> i32 {
                         public_key: public_key.to_string(),
                         bot_token: bot_token.map(str::to_string),
                     });
+                    config_set = true;
                 }
             }
         }
@@ -482,6 +484,10 @@ pub extern "C" fn channel_auth_init(ptr: i32, len: i32) -> i32 {
                     *guard = Some(tokens_value);
                 }
             }
+            return 0;
+        }
+
+        if config_set {
             return 0;
         }
     }
