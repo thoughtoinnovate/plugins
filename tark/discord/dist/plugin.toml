@@ -12,7 +12,7 @@ wasm = "dist/plugin.wasm"
 
 [capabilities]
 storage = true
-http = ["discord.com", "discordapp.com"]
+http = ["discord.com", "discordapp.com", "discord.gg"]
 env = [
     "DISCORD_PUBLIC_KEY",
     "DISCORD_APPLICATION_ID",
