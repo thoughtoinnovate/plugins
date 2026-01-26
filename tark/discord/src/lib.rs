@@ -6,7 +6,10 @@
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+const DISCORD_GATEWAY_URL: &str = "wss://gateway.discord.gg/?v=10&encoding=json";
+const DISCORD_INTENTS_DM_ONLY: u64 = 1 | 4096 | 32768; // GUILDS + DIRECT_MESSAGES + MESSAGE_CONTENT
 
 // =============================================================================
 // Host Function Imports (provided by tark)
@@ -36,6 +39,32 @@ extern "C" {
         headers_len: i32,
         ret_ptr: i32,
     ) -> i32;
+}
+
+#[link(wasm_import_module = "tark:ws")]
+extern "C" {
+    #[link_name = "connect"]
+    fn ws_connect_raw(
+        url_ptr: i32,
+        url_len: i32,
+        headers_ptr: i32,
+        headers_len: i32,
+        ret_ptr: i32,
+    ) -> i32;
+
+    #[link_name = "send"]
+    fn ws_send_raw(handle: i64, data_ptr: i32, data_len: i32, ret_ptr: i32) -> i32;
+
+    #[link_name = "recv"]
+    fn ws_recv_raw(
+        handle: i64,
+        timeout_ms: i64,
+        max_bytes: i64,
+        ret_ptr: i32,
+    ) -> i32;
+
+    #[link_name = "close"]
+    fn ws_close_raw(handle: i64, ret_ptr: i32) -> i32;
 }
 
 #[link(wasm_import_module = "tark:log")]
@@ -145,6 +174,40 @@ enum PrivateMode {
 
 static CONFIG_CACHE: std::sync::Mutex<Option<DiscordConfig>> = std::sync::Mutex::new(None);
 static TOKEN_CACHE: std::sync::Mutex<Option<OAuthTokens>> = std::sync::Mutex::new(None);
+static STATS: std::sync::LazyLock<std::sync::Mutex<DiscordStats>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(DiscordStats::default()));
+static GATEWAY_STATE: std::sync::LazyLock<std::sync::Mutex<GatewayState>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(GatewayState::default()));
+
+#[derive(Default, Clone)]
+struct DiscordStats {
+    sent: u64,
+    received: u64,
+    gateway_connected: bool,
+}
+
+#[derive(Default, Clone)]
+struct GatewayState {
+    handle: Option<u64>,
+    heartbeat_interval_ms: Option<u64>,
+    last_heartbeat: Option<Instant>,
+    last_heartbeat_ack: bool,
+    seq: Option<i64>,
+    connected: bool,
+}
+
+#[derive(Deserialize)]
+struct WsResponse {
+    ok: bool,
+    #[serde(default)]
+    handle: Option<u64>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    closed: Option<bool>,
+    #[serde(default)]
+    error: Option<String>,
+}
 
 #[derive(Debug, Deserialize)]
 struct HttpResponse {
@@ -231,6 +294,74 @@ fn http_post(url: &str, body: &str, headers: &[(String, String)]) -> Option<Http
             return None;
         }
         serde_json::from_value(value).ok()
+    }
+}
+
+fn ws_connect(url: &str, headers: &[(String, String)]) -> Result<u64, String> {
+    let headers_json = serde_json::to_string(headers).unwrap_or_else(|_| "[]".to_string());
+    unsafe {
+        let ret = ws_connect_raw(
+            url.as_ptr() as i32,
+            url.len() as i32,
+            headers_json.as_ptr() as i32,
+            headers_json.len() as i32,
+            return_buffer_ptr(),
+        );
+        if ret <= 0 {
+            return Err("ws_connect failed".to_string());
+        }
+        let payload = String::from_utf8(return_buffer_bytes(ret).to_vec()).map_err(|_| "bad ws response".to_string())?;
+        let resp: WsResponse = serde_json::from_str(&payload).map_err(|_| "bad ws json".to_string())?;
+        if !resp.ok {
+            return Err(resp.error.unwrap_or_else(|| "ws_connect error".to_string()));
+        }
+        resp.handle.ok_or_else(|| "missing ws handle".to_string())
+    }
+}
+
+fn ws_send(handle: u64, data: &str) -> Result<(), String> {
+    unsafe {
+        let ret = ws_send_raw(
+            handle as i64,
+            data.as_ptr() as i32,
+            data.len() as i32,
+            return_buffer_ptr(),
+        );
+        if ret <= 0 {
+            return Err("ws_send failed".to_string());
+        }
+        let payload = String::from_utf8(return_buffer_bytes(ret).to_vec()).map_err(|_| "bad ws response".to_string())?;
+        let resp: WsResponse = serde_json::from_str(&payload).map_err(|_| "bad ws json".to_string())?;
+        if !resp.ok {
+            return Err(resp.error.unwrap_or_else(|| "ws_send error".to_string()));
+        }
+        Ok(())
+    }
+}
+
+fn ws_recv(handle: u64, timeout_ms: u64, max_bytes: u64) -> Result<WsResponse, String> {
+    unsafe {
+        let ret = ws_recv_raw(
+            handle as i64,
+            timeout_ms as i64,
+            max_bytes as i64,
+            return_buffer_ptr(),
+        );
+        if ret <= 0 {
+            return Err("ws_recv failed".to_string());
+        }
+        let payload = String::from_utf8(return_buffer_bytes(ret).to_vec()).map_err(|_| "bad ws response".to_string())?;
+        let resp: WsResponse = serde_json::from_str(&payload).map_err(|_| "bad ws json".to_string())?;
+        if !resp.ok {
+            return Err(resp.error.unwrap_or_else(|| "ws_recv error".to_string()));
+        }
+        Ok(resp)
+    }
+}
+
+fn ws_close(handle: u64) {
+    unsafe {
+        let _ = ws_close_raw(handle as i64, return_buffer_ptr());
     }
 }
 
@@ -383,6 +514,24 @@ fn respond_json(response: &WebhookResponse, ret_ptr: i32) -> i32 {
     }
 }
 
+fn record_received() {
+    if let Ok(mut stats) = STATS.lock() {
+        stats.received = stats.received.saturating_add(1);
+    }
+}
+
+fn record_sent() {
+    if let Ok(mut stats) = STATS.lock() {
+        stats.sent = stats.sent.saturating_add(1);
+    }
+}
+
+fn set_gateway_connected(connected: bool) {
+    if let Ok(mut stats) = STATS.lock() {
+        stats.gateway_connected = connected;
+    }
+}
+
 fn write_string(ptr: i32, value: &str) -> i32 {
     unsafe {
         let bytes = value.as_bytes();
@@ -512,6 +661,36 @@ pub extern "C" fn channel_handle_gateway_event(ptr: i32, len: i32, ret_ptr: i32)
         Ok(json) => write_string(ret_ptr, &json),
         Err(_) => -1,
     }
+}
+
+#[no_mangle]
+pub extern "C" fn channel_poll(ret_ptr: i32) -> i32 {
+    let messages = gateway_poll();
+    match serde_json::to_string(&messages) {
+        Ok(json) => write_string(ret_ptr, &json),
+        Err(_) => -1,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn channel_widget_state(ret_ptr: i32) -> i32 {
+    let stats = match STATS.lock() {
+        Ok(s) => s.clone(),
+        Err(_) => DiscordStats::default(),
+    };
+    let status = if stats.gateway_connected {
+        "connected"
+    } else {
+        "disconnected"
+    };
+    let payload = serde_json::json!({
+        "status": status,
+        "messages": {
+            "sent": stats.sent,
+            "received": stats.received
+        }
+    });
+    write_string(ret_ptr, &payload.to_string())
 }
 
 #[no_mangle]
@@ -732,11 +911,15 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
         let body = payload.to_string();
         let headers = vec![("Content-Type".to_string(), "application/json".to_string())];
         if let Some(resp) = http_post(&url, &body, &headers) {
+            let success = resp.status >= 200 && resp.status < 300;
+            if success {
+                record_sent();
+            }
             let msg_id = extract_message_id(&resp.body);
             let response = serde_json::json!({
-                "success": resp.status >= 200 && resp.status < 300,
+                "success": success,
                 "message_id": msg_id,
-                "error": if resp.status >= 200 && resp.status < 300 { Value::Null } else { Value::String(resp.body) }
+                "error": if success { Value::Null } else { Value::String(resp.body) }
             });
             return write_string(ret_ptr, &response.to_string());
         }
@@ -770,11 +953,15 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
             ("Authorization".to_string(), format!("Bot {}", bot_token)),
         ];
         if let Some(resp) = http_post(&url, &body, &headers) {
+            let success = resp.status >= 200 && resp.status < 300;
+            if success {
+                record_sent();
+            }
             let msg_id = extract_message_id(&resp.body);
             let response = serde_json::json!({
-                "success": resp.status >= 200 && resp.status < 300,
+                "success": success,
                 "message_id": msg_id,
-                "error": if resp.status >= 200 && resp.status < 300 { Value::Null } else { Value::String(resp.body) }
+                "error": if success { Value::Null } else { Value::String(resp.body) }
             });
             return write_string(ret_ptr, &response.to_string());
         }
@@ -810,11 +997,15 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
             ),
         ];
         if let Some(resp) = http_post(&url, &body, &headers) {
+            let success = resp.status >= 200 && resp.status < 300;
+            if success {
+                record_sent();
+            }
             let msg_id = extract_message_id(&resp.body);
             let response = serde_json::json!({
-                "success": resp.status >= 200 && resp.status < 300,
+                "success": success,
                 "message_id": msg_id,
-                "error": if resp.status >= 200 && resp.status < 300 { Value::Null } else { Value::String(resp.body) }
+                "error": if success { Value::Null } else { Value::String(resp.body) }
             });
             return write_string(ret_ptr, &response.to_string());
         }
@@ -914,6 +1105,153 @@ fn extract_message_id(body: &str) -> Option<String> {
     value.get("id").and_then(Value::as_str).map(str::to_string)
 }
 
+fn reset_gateway(state: &mut GatewayState) {
+    if let Some(handle) = state.handle.take() {
+        ws_close(handle);
+    }
+    state.heartbeat_interval_ms = None;
+    state.last_heartbeat = None;
+    state.last_heartbeat_ack = true;
+    state.seq = None;
+    state.connected = false;
+    set_gateway_connected(false);
+}
+
+fn handle_gateway_payload(state: &mut GatewayState, payload: &Value, token: &str) -> Vec<InboundMessage> {
+    let op = payload.get("op").and_then(Value::as_i64).unwrap_or(0);
+    if let Some(seq) = payload.get("s").and_then(Value::as_i64) {
+        state.seq = Some(seq);
+    }
+
+    match op {
+        10 => {
+            let interval_ms = payload
+                .get("d")
+                .and_then(|d| d.get("heartbeat_interval"))
+                .and_then(Value::as_u64)
+                .unwrap_or(45000);
+            state.heartbeat_interval_ms = Some(interval_ms);
+            state.last_heartbeat_ack = true;
+            state.last_heartbeat = Some(Instant::now());
+            let identify = serde_json::json!({
+                "op": 2,
+                "d": {
+                    "token": token,
+                    "intents": DISCORD_INTENTS_DM_ONLY,
+                    "properties": {
+                        "$os": "linux",
+                        "$browser": "tark",
+                        "$device": "tark"
+                    }
+                }
+            });
+            if let Some(handle) = state.handle {
+                let _ = ws_send(handle, &identify.to_string());
+            }
+        }
+        11 => {
+            state.last_heartbeat_ack = true;
+        }
+        7 | 9 => {
+            reset_gateway(state);
+        }
+        0 => {
+            let event_type = payload.get("t").and_then(Value::as_str).unwrap_or("");
+            let data = payload.get("d").unwrap_or(&Value::Null);
+            match event_type {
+                "READY" => {
+                    state.connected = true;
+                    set_gateway_connected(true);
+                }
+                "MESSAGE_CREATE" => return parse_gateway_message_create(data),
+                "INTERACTION_CREATE" => return parse_gateway_interaction_create(data),
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+
+    Vec::new()
+}
+
+fn gateway_poll() -> Vec<InboundMessage> {
+    let token = match get_bot_token() {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+
+    let mut state = match GATEWAY_STATE.lock() {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+
+    if state.handle.is_none() {
+        match ws_connect(DISCORD_GATEWAY_URL, &[]) {
+            Ok(handle) => {
+                state.handle = Some(handle);
+                state.connected = false;
+                set_gateway_connected(false);
+            }
+            Err(err) => {
+                log_error(&format!("gateway connect failed: {}", err));
+                return Vec::new();
+            }
+        }
+    }
+
+    let mut messages = Vec::new();
+    let mut loops = 0;
+    while loops < 25 {
+        loops += 1;
+        let handle = match state.handle {
+            Some(h) => h,
+            None => break,
+        };
+        let resp = match ws_recv(handle, 0, 65536) {
+            Ok(r) => r,
+            Err(_) => {
+                reset_gateway(&mut state);
+                break;
+            }
+        };
+
+        if resp.closed.unwrap_or(false) {
+            reset_gateway(&mut state);
+            break;
+        }
+        if let Some(msg) = resp.message {
+            if let Ok(payload) = serde_json::from_str::<Value>(&msg) {
+                let mut inbound = handle_gateway_payload(&mut state, &payload, &token);
+                messages.append(&mut inbound);
+            }
+            continue;
+        }
+        break;
+    }
+
+    if let Some(interval_ms) = state.heartbeat_interval_ms {
+        if let Some(last) = state.last_heartbeat {
+            if last.elapsed() >= Duration::from_millis(interval_ms) {
+                if !state.last_heartbeat_ack {
+                    reset_gateway(&mut state);
+                    return messages;
+                }
+                let heartbeat = serde_json::json!({
+                    "op": 1,
+                    "d": state.seq
+                });
+                if let Some(handle) = state.handle {
+                    let _ = ws_send(handle, &heartbeat.to_string());
+                    state.last_heartbeat = Some(Instant::now());
+                    state.last_heartbeat_ack = false;
+                }
+            }
+        }
+    }
+
+    messages
+}
+
 fn parse_gateway_event(payload: &Value) -> Vec<InboundMessage> {
     let event_type = payload.get("t").and_then(Value::as_str).unwrap_or("");
     let data = payload.get("d").unwrap_or(&Value::Null);
@@ -973,6 +1311,7 @@ fn parse_gateway_message_create(data: &Value) -> Vec<InboundMessage> {
         }
     });
 
+    record_received();
     vec![InboundMessage {
         conversation_id: channel_id,
         user_id,
@@ -1024,6 +1363,7 @@ fn parse_gateway_interaction_create(data: &Value) -> Vec<InboundMessage> {
         return Vec::new();
     }
 
+    record_received();
     vec![InboundMessage {
         conversation_id,
         user_id,

@@ -2,8 +2,8 @@
 
 [plugin]
 name = "discord"
-version = "0.1.0"
-description = "Discord channel integration (interactions-only)"
+version = "0.2.0"
+description = "Discord channel integration (gateway DM + interactions)"
 author = "tark contributors"
 homepage = "https://github.com/tark-ai/tark"
 type = "channel"
