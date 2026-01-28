@@ -897,6 +897,10 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
     let mut tool_status: Option<ToolStatus> = None;
     let mut tool_key: Option<String> = None;
 
+    if should_suppress_session_header(&conversation_id, &text) {
+        return write_string(ret_ptr, "{\"success\":true,\"message_id\":null,\"error\":null}");
+    }
+
     if should_suppress_tool_output(&text) {
         return write_string(ret_ptr, "{\"success\":true,\"message_id\":null,\"error\":null}");
     }
@@ -1248,6 +1252,26 @@ fn should_suppress_tool_output(text: &str) -> bool {
     if trimmed.starts_with("[Tool:") {
         return true;
     }
+    false
+}
+
+fn is_session_header(text: &str) -> bool {
+    text.trim_start().starts_with("── Session:")
+}
+
+fn session_header_key(conversation_id: &str) -> String {
+    format!("discord_session_header:{}", conversation_id)
+}
+
+fn should_suppress_session_header(conversation_id: &str, text: &str) -> bool {
+    if !is_session_header(text) {
+        return false;
+    }
+    let key = session_header_key(conversation_id);
+    if storage_get(&key).is_some() {
+        return true;
+    }
+    let _ = storage_set(&key, "1");
     false
 }
 
