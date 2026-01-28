@@ -897,6 +897,12 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
     let mut tool_status: Option<ToolStatus> = None;
     let mut tool_key: Option<String> = None;
 
+    if should_suppress_tool_output(&text) {
+        return write_string(ret_ptr, "{\"success\":true,\"message_id\":null,\"error\":null}");
+    }
+
+    text = strip_tool_summary(&text);
+
     if let Some((status, tool_name)) = parse_tool_status(&text) {
         tool_status = Some(status);
         tool_key = Some(tool_status_key(&conversation_id, &tool_name));
@@ -905,11 +911,30 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
             ToolStatus::Completed => format!("✅ Completed {}", tool_name),
             ToolStatus::Failed => format!("❌ Failed {}", tool_name),
         };
-        if matches!(status, ToolStatus::Completed | ToolStatus::Failed) {
-            if let Some(key) = tool_key.as_ref() {
-                if let Some(stored_id) = storage_get(key) {
-                    message_id = Some(stored_id);
+        if let Some(key) = tool_key.as_deref() {
+            let tool_state = read_tool_state(key);
+            if matches!(status, ToolStatus::Running) {
+                if let Some((state, stored_id, ts)) = tool_state.as_ref() {
+                    if state == "done" && is_recent(*ts) {
+                        return write_string(
+                            ret_ptr,
+                            "{\"success\":true,\"message_id\":null,\"error\":null}",
+                        );
+                    }
+                    if state == "running" {
+                        message_id = Some(stored_id.clone());
+                    } else {
+                        clear_tool_state(key);
+                    }
                 }
+            } else if let Some((state, stored_id, ts)) = tool_state.as_ref() {
+                if state == "done" && is_recent(*ts) {
+                    return write_string(
+                        ret_ptr,
+                        "{\"success\":true,\"message_id\":null,\"error\":null}",
+                    );
+                }
+                message_id = Some(stored_id.clone());
             }
         }
     }
@@ -949,7 +974,16 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
             let msg_id = extract_message_id(&resp.body);
             if success {
                 record_sent();
-                persist_tool_status(tool_status, tool_key.as_deref(), msg_id.as_deref());
+                if let (Some(status), Some(key), Some(id)) =
+                    (tool_status, tool_key.as_deref(), msg_id.as_deref())
+                {
+                    match status {
+                        ToolStatus::Running => write_tool_state(key, "running", id),
+                        ToolStatus::Completed | ToolStatus::Failed => {
+                            write_tool_state(key, "done", id)
+                        }
+                    }
+                }
             }
             let response = serde_json::json!({
                 "success": success,
@@ -992,7 +1026,16 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
             let msg_id = extract_message_id(&resp.body);
             if success {
                 record_sent();
-                persist_tool_status(tool_status, tool_key.as_deref(), msg_id.as_deref());
+                if let (Some(status), Some(key), Some(id)) =
+                    (tool_status, tool_key.as_deref(), msg_id.as_deref())
+                {
+                    match status {
+                        ToolStatus::Running => write_tool_state(key, "running", id),
+                        ToolStatus::Completed | ToolStatus::Failed => {
+                            write_tool_state(key, "done", id)
+                        }
+                    }
+                }
             }
             let response = serde_json::json!({
                 "success": success,
@@ -1037,7 +1080,16 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
             let msg_id = extract_message_id(&resp.body);
             if success {
                 record_sent();
-                persist_tool_status(tool_status, tool_key.as_deref(), msg_id.as_deref());
+                if let (Some(status), Some(key), Some(id)) =
+                    (tool_status, tool_key.as_deref(), msg_id.as_deref())
+                {
+                    match status {
+                        ToolStatus::Running => write_tool_state(key, "running", id),
+                        ToolStatus::Completed | ToolStatus::Failed => {
+                            write_tool_state(key, "done", id)
+                        }
+                    }
+                }
             }
             let response = serde_json::json!({
                 "success": success,
@@ -1076,12 +1128,14 @@ fn parse_send_metadata(metadata_json: &str) -> (Option<String>, bool) {
     (channel_id, ephemeral)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum ToolStatus {
     Running,
     Completed,
     Failed,
 }
+
+const TOOL_STATE_TTL_SECS: u64 = 10;
 
 fn parse_tool_status(text: &str) -> Option<(ToolStatus, String)> {
     let trimmed = text.trim();
@@ -1149,26 +1203,65 @@ fn hex_char(val: u8) -> char {
     }
 }
 
-fn persist_tool_status(
-    status: Option<ToolStatus>,
-    key: Option<&str>,
-    message_id: Option<&str>,
-) {
-    let Some(status) = status else {
-        return;
-    };
-    match status {
-        ToolStatus::Running => {
-            if let (Some(k), Some(id)) = (key, message_id) {
-                let _ = storage_set(k, id);
-            }
-        }
-        ToolStatus::Completed | ToolStatus::Failed => {
-            if let Some(k) = key {
-                let _ = storage_delete(k);
+fn tool_state_value(state: &str, message_id: &str, ts: u64) -> String {
+    format!("{}|{}|{}", state, message_id, ts)
+}
+
+fn read_tool_state(key: &str) -> Option<(String, String, u64)> {
+    let value = storage_get(key)?;
+    let mut parts = value.splitn(3, '|');
+    let state = parts.next()?.to_string();
+    let message_id = parts.next()?.to_string();
+    let ts = parts.next()?.parse::<u64>().ok()?;
+    Some((state, message_id, ts))
+}
+
+fn write_tool_state(key: &str, state: &str, message_id: &str) {
+    let ts = now_seconds();
+    let _ = storage_set(key, &tool_state_value(state, message_id, ts));
+}
+
+fn clear_tool_state(key: &str) {
+    let _ = storage_delete(key);
+}
+
+fn now_seconds() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn is_recent(ts: u64) -> bool {
+    now_seconds().saturating_sub(ts) <= TOOL_STATE_TTL_SECS
+}
+
+fn should_suppress_tool_output(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.starts_with("Tool activity (") {
+        return true;
+    }
+    if trimmed.starts_with("Tool result:") {
+        return true;
+    }
+    if trimmed.starts_with("[Tool:") {
+        return true;
+    }
+    false
+}
+
+fn strip_tool_summary(text: &str) -> String {
+    let mut lines: Vec<&str> = text.lines().collect();
+    if let Some(last) = lines.last().copied() {
+        if last.trim_start().starts_with("Tools used:") {
+            lines.pop();
+            while lines.last().map(|l| l.trim()).unwrap_or("").is_empty() {
+                lines.pop();
             }
         }
     }
+    lines.join("\n")
 }
 
 // =============================================================================
