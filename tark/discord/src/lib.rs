@@ -832,6 +832,7 @@ pub extern "C" fn channel_handle_webhook(
         store_interaction_token(&conversation_id, &interaction_token);
     }
     let ephemeral = false;
+    let attachments = extract_attachments_from_interaction(&payload);
     let metadata = serde_json::json!({
         "discord": {
             "user_id": user_id.clone(),
@@ -839,7 +840,8 @@ pub extern "C" fn channel_handle_webhook(
             "guild_id": guild_id.clone(),
             "roles": roles,
             "interaction_token": interaction_token,
-            "ephemeral": ephemeral
+            "ephemeral": ephemeral,
+            "attachments": attachments
         },
         "tark_command": command
     });
@@ -878,12 +880,12 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let text = request
+    let mut text = request
         .get("text")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let message_id = request
+    let mut message_id = request
         .get("message_id")
         .and_then(Value::as_str)
         .map(str::to_string);
@@ -892,6 +894,25 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
         .and_then(Value::as_str)
         .unwrap_or("");
     let (channel_id_override, ephemeral) = parse_send_metadata(metadata_json);
+    let mut tool_status: Option<ToolStatus> = None;
+    let mut tool_key: Option<String> = None;
+
+    if let Some((status, tool_name)) = parse_tool_status(&text) {
+        tool_status = Some(status);
+        tool_key = Some(tool_status_key(&conversation_id, &tool_name));
+        text = match status {
+            ToolStatus::Running => format!("🔧 Running {}", tool_name),
+            ToolStatus::Completed => format!("✅ Completed {}", tool_name),
+            ToolStatus::Failed => format!("❌ Failed {}", tool_name),
+        };
+        if matches!(status, ToolStatus::Completed | ToolStatus::Failed) {
+            if let Some(key) = tool_key.as_ref() {
+                if let Some(stored_id) = storage_get(key) {
+                    message_id = Some(stored_id);
+                }
+            }
+        }
+    }
 
     let app_id = match get_application_id() {
         Some(id) => id,
@@ -925,10 +946,11 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
         let headers = vec![("Content-Type".to_string(), "application/json".to_string())];
         if let Some(resp) = http_post(&url, &body, &headers) {
             let success = resp.status >= 200 && resp.status < 300;
+            let msg_id = extract_message_id(&resp.body);
             if success {
                 record_sent();
+                persist_tool_status(tool_status, tool_key.as_deref(), msg_id.as_deref());
             }
-            let msg_id = extract_message_id(&resp.body);
             let response = serde_json::json!({
                 "success": success,
                 "message_id": msg_id,
@@ -967,10 +989,11 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
         ];
         if let Some(resp) = http_post(&url, &body, &headers) {
             let success = resp.status >= 200 && resp.status < 300;
+            let msg_id = extract_message_id(&resp.body);
             if success {
                 record_sent();
+                persist_tool_status(tool_status, tool_key.as_deref(), msg_id.as_deref());
             }
-            let msg_id = extract_message_id(&resp.body);
             let response = serde_json::json!({
                 "success": success,
                 "message_id": msg_id,
@@ -1011,10 +1034,11 @@ pub extern "C" fn channel_send(req_ptr: i32, req_len: i32, ret_ptr: i32) -> i32 
         ];
         if let Some(resp) = http_post(&url, &body, &headers) {
             let success = resp.status >= 200 && resp.status < 300;
+            let msg_id = extract_message_id(&resp.body);
             if success {
                 record_sent();
+                persist_tool_status(tool_status, tool_key.as_deref(), msg_id.as_deref());
             }
-            let msg_id = extract_message_id(&resp.body);
             let response = serde_json::json!({
                 "success": success,
                 "message_id": msg_id,
@@ -1050,6 +1074,101 @@ fn parse_send_metadata(metadata_json: &str) -> (Option<String>, bool) {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     (channel_id, ephemeral)
+}
+
+#[derive(Clone, Copy)]
+enum ToolStatus {
+    Running,
+    Completed,
+    Failed,
+}
+
+fn parse_tool_status(text: &str) -> Option<(ToolStatus, String)> {
+    let trimmed = text.trim();
+    if let Some(rest) = trimmed.strip_prefix("🔧 Running ") {
+        let tool = extract_tool_name(rest)?;
+        return Some((ToolStatus::Running, tool));
+    }
+    if let Some(rest) = trimmed.strip_prefix("✅ Completed ") {
+        let tool = extract_tool_name(rest)?;
+        return Some((ToolStatus::Completed, tool));
+    }
+    if let Some(rest) = trimmed.strip_prefix("❌ Failed ") {
+        let tool = extract_tool_name(rest)?;
+        return Some((ToolStatus::Failed, tool));
+    }
+    None
+}
+
+fn extract_tool_name(rest: &str) -> Option<String> {
+    let rest = rest.trim_start();
+    if rest.is_empty() {
+        return None;
+    }
+    if let Some(stripped) = rest.strip_prefix('`') {
+        let end = stripped.find('`')?;
+        let name = stripped[..end].trim();
+        if name.is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        }
+    } else {
+        let end = rest.find('\n').unwrap_or(rest.len());
+        let name = rest[..end].trim();
+        if name.is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        }
+    }
+}
+
+fn tool_status_key(conversation_id: &str, tool_name: &str) -> String {
+    format!(
+        "discord_tool_msg:{}:{}",
+        conversation_id,
+        hex_encode(tool_name)
+    )
+}
+
+fn hex_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() * 2);
+    for b in value.as_bytes() {
+        out.push(hex_char(b >> 4));
+        out.push(hex_char(b & 0x0f));
+    }
+    out
+}
+
+fn hex_char(val: u8) -> char {
+    match val {
+        0..=9 => (b'0' + val) as char,
+        10..=15 => (b'a' + (val - 10)) as char,
+        _ => '0',
+    }
+}
+
+fn persist_tool_status(
+    status: Option<ToolStatus>,
+    key: Option<&str>,
+    message_id: Option<&str>,
+) {
+    let Some(status) = status else {
+        return;
+    };
+    match status {
+        ToolStatus::Running => {
+            if let (Some(k), Some(id)) = (key, message_id) {
+                let _ = storage_set(k, id);
+            }
+        }
+        ToolStatus::Completed | ToolStatus::Failed => {
+            if let Some(k) = key {
+                let _ = storage_delete(k);
+            }
+        }
+    }
 }
 
 // =============================================================================
@@ -1111,6 +1230,53 @@ fn extract_command(payload: &Value) -> (String, Value) {
     } else {
         (format!("/tark {}", name), command)
     }
+}
+
+fn normalize_attachment(item: &Value) -> Option<Value> {
+    let url = item.get("url").and_then(Value::as_str)?;
+    let filename = item
+        .get("filename")
+        .and_then(Value::as_str)
+        .unwrap_or("attachment");
+    let id = item.get("id").and_then(Value::as_str).unwrap_or("");
+    let content_type = item.get("content_type").and_then(Value::as_str);
+    let size = item.get("size").and_then(Value::as_u64);
+    let width = item.get("width").and_then(Value::as_u64);
+    let height = item.get("height").and_then(Value::as_u64);
+    Some(serde_json::json!({
+        "id": id,
+        "filename": filename,
+        "url": url,
+        "content_type": content_type,
+        "size": size,
+        "width": width,
+        "height": height
+    }))
+}
+
+fn extract_attachments_from_message(data: &Value) -> Vec<Value> {
+    let mut attachments = Vec::new();
+    if let Some(items) = data.get("attachments").and_then(Value::as_array) {
+        for item in items {
+            if let Some(normalized) = normalize_attachment(item) {
+                attachments.push(normalized);
+            }
+        }
+    }
+    attachments
+}
+
+fn extract_attachments_from_interaction(data: &Value) -> Vec<Value> {
+    let mut attachments = Vec::new();
+    let resolved = data.get("data").and_then(|d| d.get("resolved"));
+    if let Some(map) = resolved.and_then(|r| r.get("attachments")).and_then(Value::as_object) {
+        for (_id, item) in map {
+            if let Some(normalized) = normalize_attachment(item) {
+                attachments.push(normalized);
+            }
+        }
+    }
+    attachments
 }
 
 fn extract_message_id(body: &str) -> Option<String> {
@@ -1315,12 +1481,13 @@ fn parse_gateway_message_create(data: &Value) -> Vec<InboundMessage> {
         return Vec::new();
     }
 
+    let attachments = extract_attachments_from_message(data);
     let content = data
         .get("content")
         .and_then(Value::as_str)
         .unwrap_or("")
         .trim();
-    if content.is_empty() {
+    if content.is_empty() && attachments.is_empty() {
         return Vec::new();
     }
 
@@ -1342,7 +1509,8 @@ fn parse_gateway_message_create(data: &Value) -> Vec<InboundMessage> {
             "guild_id": null,
             "roles": [],
             "interaction_token": "",
-            "ephemeral": false
+            "ephemeral": false,
+            "attachments": attachments
         }
     });
 
@@ -1381,6 +1549,7 @@ fn parse_gateway_interaction_create(data: &Value) -> Vec<InboundMessage> {
     if !interaction_token.is_empty() {
         store_interaction_token(&conversation_id, &interaction_token);
     }
+    let attachments = extract_attachments_from_interaction(data);
 
     let metadata = serde_json::json!({
         "discord": {
@@ -1389,12 +1558,13 @@ fn parse_gateway_interaction_create(data: &Value) -> Vec<InboundMessage> {
             "guild_id": null,
             "roles": roles,
             "interaction_token": interaction_token,
-            "ephemeral": false
+            "ephemeral": false,
+            "attachments": attachments
         },
         "tark_command": command
     });
 
-    if text.trim().is_empty() {
+    if text.trim().is_empty() && attachments.is_empty() {
         return Vec::new();
     }
 
