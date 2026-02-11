@@ -1,0 +1,39 @@
+name: Neovim Editor Adapter Tests
+
+on:
+  push:
+    paths:
+      - 'tark/editors/neovim/**'
+      - '.github/workflows/neovim-editor-adapter.yml'
+  pull_request:
+    paths:
+      - 'tark/editors/neovim/**'
+      - '.github/workflows/neovim-editor-adapter.yml'
+
+jobs:
+  neovim-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tark/editors/neovim
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Neovim
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: stable
+
+      - name: Install plenary.nvim
+        run: |
+          mkdir -p "$HOME/.local/share/nvim"
+          PLENARY_DIR="$HOME/.local/share/nvim/plenary.nvim"
+          if [ ! -d "$PLENARY_DIR" ]; then
+            git clone --depth=1 https://github.com/nvim-lua/plenary.nvim "$PLENARY_DIR"
+          fi
+
+      - name: Run Neovim tests
+        run: |
+          nvim --headless -u tests/minimal_init.lua \
+            -c "PlenaryBustedDirectory tests/specs/ {minimal_init = 'tests/minimal_init.lua'}"

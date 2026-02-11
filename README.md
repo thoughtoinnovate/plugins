@@ -2,6 +2,12 @@
 
 External plugins for tark CLI.
 
+## Editor Adapters
+
+Editor-specific integrations live under `tark/editors/`.
+
+- `tark/editors/neovim` - Neovim adapter plugin (`tark.nvim`)
+
 ## Available Plugins
 
 ### InnoDrupe/gemini-auth
