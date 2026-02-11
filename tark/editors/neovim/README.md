@@ -17,6 +17,21 @@ return {
 }
 ```
 
+## Install (lazy.nvim from monorepo)
+
+```lua
+return {
+  url = "https://github.com/thoughtoinnovate/plugins",
+  dir = "tark/editors/neovim",
+  lazy = false,
+  keys = {
+    { "<leader>tc", "<cmd>TarkToggle<cr>", desc = "Toggle tark chat" },
+  },
+}
+```
+
+Note: Lazy.nvim will clone the monorepo, but it will only load the Neovim adapter from `tark/editors/neovim`.
+
 ## Core requirements
 
 - `tark` binary installed and on `PATH` (or configure `binary` path).
