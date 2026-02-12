@@ -42,7 +42,7 @@ end
 
 local function resolve_binary()
     local binary = require('tark.binary')
-    return binary.find()
+    return binary.find(true)
 end
 
 local function parse_frames(chunk)
@@ -231,7 +231,7 @@ function M.ensure_started(cb)
 
     local bin = resolve_binary()
     if not bin then
-        cb(false, 'tark binary not found. Run :TarkDownload')
+        cb(false, 'No ACP-compatible tark binary found. Update/install tark and run :TarkVersion')
         return
     end
 

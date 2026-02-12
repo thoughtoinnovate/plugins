@@ -28,6 +28,11 @@ describe('binary - binary management', function()
             assert.is_true(result == nil or type(result) == 'string')
         end)
 
+        it('supports ACP capability filter', function()
+            local result = binary.find(true)
+            assert.is_true(result == nil or type(result) == 'string')
+        end)
+
         it('can be called multiple times', function()
             local result1 = binary.find()
             local result2 = binary.find()
@@ -67,4 +72,3 @@ describe('binary - binary management', function()
         end)
     end)
 end)
-

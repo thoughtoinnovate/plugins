@@ -64,22 +64,39 @@ local function get_binary_path()
     return get_data_dir() .. '/tark'
 end
 
+local function supports_acp(bin)
+    if not bin or bin == '' then
+        return false
+    end
+
+    vim.fn.system({ bin, 'acp', '--help' })
+    return vim.v.shell_error == 0
+end
+
 -- Find tark binary
-function M.find()
+function M.find(require_acp)
+    local require_acp_capability = require_acp == true
+
     -- Check configured path
     if M.config.binary and vim.fn.executable(M.config.binary) == 1 then
-        return M.config.binary
+        if not require_acp_capability or supports_acp(M.config.binary) then
+            return M.config.binary
+        end
     end
     
     -- Check data directory
     local data_bin = get_binary_path()
     if vim.fn.filereadable(data_bin) == 1 and vim.fn.executable(data_bin) == 1 then
-        return data_bin
+        if not require_acp_capability or supports_acp(data_bin) then
+            return data_bin
+        end
     end
     
     -- Check PATH
     if vim.fn.executable('tark') == 1 then
-        return 'tark'
+        if not require_acp_capability or supports_acp('tark') then
+            return 'tark'
+        end
     end
     
     return nil
@@ -193,4 +210,3 @@ function M.setup(config)
 end
 
 return M
-
