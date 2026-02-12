@@ -58,4 +58,18 @@ describe('chat widget - ACP integration', function()
         chat.clear_pending_questionnaire()
         assert.is_nil(chat.pending_questionnaire())
     end)
+
+    it('renders multiline error text without buffer line errors', function()
+        state.messages = {}
+        state.transcript_buf = vim.api.nvim_create_buf(false, true)
+        vim.bo[state.transcript_buf].modifiable = false
+
+        local ok = pcall(function()
+            chat.on_error({ message = 'line one\nline two\nline three' })
+        end)
+
+        assert.is_true(ok)
+
+        state.transcript_buf = nil
+    end)
 end)

@@ -48,9 +48,25 @@ local function render_transcript()
 
     local lines = { 'tark chat (ACP v2)', string.rep('=', 40), status_line(), '' }
 
-    for _, msg in ipairs(state.messages) do
-        table.insert(lines, string.format('%s: %s', msg.role, msg.text))
+    local function append_message(role, text)
+        local body = tostring(text or '')
+        local parts = vim.split(body, '\n', { plain = true, trimempty = false })
+
+        if #parts == 0 then
+            table.insert(lines, string.format('%s: ', role))
+            table.insert(lines, '')
+            return
+        end
+
+        table.insert(lines, string.format('%s: %s', role, parts[1]))
+        for i = 2, #parts do
+            table.insert(lines, string.format('  %s', parts[i]))
+        end
         table.insert(lines, '')
+    end
+
+    for _, msg in ipairs(state.messages) do
+        append_message(msg.role, msg.text)
     end
 
     if state.pending_approval then
