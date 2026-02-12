@@ -1,6 +1,6 @@
-# tark.nvim (Editor Adapter)
+# tark.nvim (ACP Widget Client)
 
-Neovim editor adapter for `tark`.
+Neovim ACP widget client for `tark`.
 
 This plugin lives outside the core repo under the plugins monorepo path:
 `plugins/tark/editors/neovim`.
@@ -12,7 +12,7 @@ return {
   dir = "~/code/plugins/tark/editors/neovim",
   lazy = false,
   keys = {
-    { "<leader>tc", "<cmd>TarkToggle<cr>", desc = "Toggle tark chat" },
+    { "<leader>tc", "<cmd>TarkChatToggle<cr>", desc = "Toggle tark chat" },
   },
 }
 ```
@@ -22,37 +22,38 @@ return {
 ```lua
 return {
   url = "https://github.com/thoughtoinnovate/plugins",
-  dir = "tark/editors/neovim",
+  name = "tark-editors",
   lazy = false,
+  init = function(plugin)
+    vim.opt.rtp:prepend(plugin.dir .. "/tark/editors/neovim")
+  end,
   keys = {
-    { "<leader>tc", "<cmd>TarkToggle<cr>", desc = "Toggle tark chat" },
+    { "<leader>tc", "<cmd>TarkChatToggle<cr>", desc = "Toggle tark chat" },
   },
 }
 ```
 
-Note: Lazy.nvim will clone the monorepo, but it will only load the Neovim adapter from `tark/editors/neovim`.
+Git-based plugin managers clone repositories, not single folders. If you want only `tark/editors/neovim`, use sparse checkout and then point Lazy.nvim to local `dir`.
 
 ## Core requirements
 
 - `tark` binary installed and on `PATH` (or configure `binary` path).
 - Neovim `0.9+`.
+- Core `tark` supports `tark acp --stdio`.
 
-## TUI workflow
+## ACP widget workflow
 
-- `:TarkToggle` / `:TarkOpen` opens `tark tui` inside a Neovim terminal split.
-- `:TarkAskBuffer [question]` sends current buffer content to the running TUI prompt.
-- `:'<,'>TarkAskSelection [question]` sends selected lines with file/line/column metadata.
-- Completion provider/model are managed by local `tark` configuration.
+- `:TarkChatToggle` / `:TarkChatOpen` opens ACP chat widget.
+- `:TarkChatClose` closes chat widget.
+- `:TarkAskBuffer [question]` sends current buffer context to ACP session.
+- `:'<,'>TarkAskSelection [question]` sends selected lines and range metadata.
+- `:TarkMode ask|plan|build` changes ACP session mode.
+- Completion provider/model remain managed by local `tark` configuration.
 
-## Editor Adapter API v1
+## Breaking migration
 
-The plugin starts a local HTTP adapter server and exposes context via:
-
-```lua
-require('tark').editor_context()
-```
-
-The context payload can be passed to core `/chat` requests as `editor`.
+- Removed terminal embedding commands: `:Tark`, `:TarkToggle`, `:TarkOpen`, `:TarkClose`.
+- Chat no longer uses core `/chat` editor payload path.
 
 ## Tests
 

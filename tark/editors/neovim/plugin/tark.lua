@@ -1,33 +1,27 @@
 -- tark.nvim plugin entry point
--- Lazy-loads the main module on first use
 
 if vim.g.loaded_tark then
     return
 end
 vim.g.loaded_tark = true
 
--- Create commands that lazy-load the plugin
-vim.api.nvim_create_user_command('Tark', function()
-    require('tark').toggle()
-end, { desc = 'Toggle tark TUI' })
+vim.api.nvim_create_user_command('TarkChatOpen', function()
+    require('tark').chat_open()
+end, { desc = 'Open ACP chat widget' })
 
-vim.api.nvim_create_user_command('TarkToggle', function()
-    require('tark').toggle()
-end, { desc = 'Toggle tark TUI (show/hide)' })
+vim.api.nvim_create_user_command('TarkChatClose', function()
+    require('tark').chat_close()
+end, { desc = 'Close ACP chat widget' })
 
-vim.api.nvim_create_user_command('TarkOpen', function()
-    require('tark').open()
-end, { desc = 'Open tark TUI' })
-
-vim.api.nvim_create_user_command('TarkClose', function()
-    require('tark').close()
-end, { desc = 'Close tark TUI' })
+vim.api.nvim_create_user_command('TarkChatToggle', function()
+    require('tark').chat_toggle()
+end, { desc = 'Toggle ACP chat widget' })
 
 vim.api.nvim_create_user_command('TarkAskBuffer', function(opts)
     require('tark').ask_buffer(opts.args)
 end, {
     nargs = '*',
-    desc = 'Send current buffer as context to tark TUI and ask a question',
+    desc = 'Send current buffer as ACP context and ask a question',
 })
 
 vim.api.nvim_create_user_command('TarkAskSelection', function(opts)
@@ -35,7 +29,22 @@ vim.api.nvim_create_user_command('TarkAskSelection', function(opts)
 end, {
     range = true,
     nargs = '*',
-    desc = 'Send selected lines as context to tark TUI and ask a question',
+    desc = 'Send selected lines as ACP context and ask a question',
+})
+
+vim.api.nvim_create_user_command('TarkMode', function(opts)
+    local mode = opts.args
+    if mode == '' then
+        vim.notify('Usage: :TarkMode ask|plan|build', vim.log.levels.WARN)
+        return
+    end
+    require('tark').set_mode(mode)
+end, {
+    nargs = 1,
+    complete = function()
+        return { 'ask', 'plan', 'build' }
+    end,
+    desc = 'Set ACP session mode (ask|plan|build)',
 })
 
 vim.api.nvim_create_user_command('TarkDownload', function()
