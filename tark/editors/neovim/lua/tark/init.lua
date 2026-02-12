@@ -14,7 +14,6 @@ M.config = {
             height = 0.5,
             input_height = 3,
         },
-        mode = 'ask',
         timeout_ms = 8000,
     },
     lsp = {

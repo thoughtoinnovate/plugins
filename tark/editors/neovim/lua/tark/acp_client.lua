@@ -15,7 +15,6 @@ M.state = {
 }
 
 M.config = {
-    mode = 'ask',
     timeout_ms = 8000,
 }
 
@@ -195,10 +194,14 @@ local function bootstrap(cb)
             return
         end
 
-        request('session/create', {
-            mode = M.config.mode,
+        local create_params = {
             cwd = vim.fn.getcwd(),
-        }, function(create_err, create_result)
+        }
+        if M.config.mode and M.config.mode ~= '' then
+            create_params.mode = M.config.mode
+        end
+
+        request('session/create', create_params, function(create_err, create_result)
             if create_err then
                 cb(false, 'session/create failed: ' .. parse_error(create_err))
                 return
