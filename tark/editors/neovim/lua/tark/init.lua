@@ -2,7 +2,7 @@
 
 local M = {}
 
-M.version = '0.11.7'
+M.version = '0.11.8'
 
 M.config = {
     binary = nil,
