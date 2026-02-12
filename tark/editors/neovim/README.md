@@ -39,7 +39,7 @@ Git-based plugin managers clone repositories, not single folders. If you want on
 
 - `tark` binary installed and on `PATH` (or configure `binary` path).
 - Neovim `0.9+`.
-- Core `tark` supports `tark acp --stdio`.
+- Core `tark` supports `tark acp --cwd <project>` and ACP v2 Content-Length framing.
 
 ## ACP widget workflow
 
@@ -47,7 +47,10 @@ Git-based plugin managers clone repositories, not single folders. If you want on
 - `:TarkChatClose` closes chat widget.
 - `:TarkAskBuffer [question]` sends current buffer context to ACP session.
 - `:'<,'>TarkAskSelection [question]` sends selected lines and range metadata.
+- `:TarkChatSend [message]` sends from input pane or argument.
+- `:TarkChatCancel` cancels active ACP request.
 - `:TarkMode ask|plan|build` changes ACP session mode.
+- `:TarkApproval ...` and questionnaire commands handle interactive tool gates.
 - Completion provider/model remain managed by local `tark` configuration.
 
 ## Breaking migration

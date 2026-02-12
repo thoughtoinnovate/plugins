@@ -93,5 +93,31 @@ describe('tark - main module', function()
             local commands = vim.api.nvim_get_commands({})
             assert.is_not_nil(commands.TarkMode)
         end)
+
+
+        it('TarkChatSend command exists', function()
+            local commands = vim.api.nvim_get_commands({})
+            assert.is_not_nil(commands.TarkChatSend)
+        end)
+
+        it('TarkChatCancel command exists', function()
+            local commands = vim.api.nvim_get_commands({})
+            assert.is_not_nil(commands.TarkChatCancel)
+        end)
+
+        it('TarkApproval command exists', function()
+            local commands = vim.api.nvim_get_commands({})
+            assert.is_not_nil(commands.TarkApproval)
+        end)
+
+        it('TarkQuestionnaireSubmit command exists', function()
+            local commands = vim.api.nvim_get_commands({})
+            assert.is_not_nil(commands.TarkQuestionnaireSubmit)
+        end)
+
+        it('TarkQuestionnaireCancel command exists', function()
+            local commands = vim.api.nvim_get_commands({})
+            assert.is_not_nil(commands.TarkQuestionnaireCancel)
+        end)
     end)
 end)

@@ -11,7 +11,7 @@ on:
       - '.github/workflows/neovim-editor-adapter.yml'
 
 jobs:
-  neovim-tests:
+  nvim-unit:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -33,7 +33,45 @@ jobs:
             git clone --depth=1 https://github.com/nvim-lua/plenary.nvim "$PLENARY_DIR"
           fi
 
-      - name: Run Neovim tests
+      - name: Run Neovim unit tests
         run: |
           nvim --headless -u tests/minimal_init.lua \
             -c "PlenaryBustedDirectory tests/specs/ {minimal_init = 'tests/minimal_init.lua'}"
+
+  nvim-headless-e2e:
+    runs-on: ubuntu-latest
+    needs: [nvim-unit]
+    defaults:
+      run:
+        working-directory: tark/editors/neovim
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Neovim
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: stable
+      - name: Install plenary.nvim
+        run: |
+          mkdir -p "$HOME/.local/share/nvim"
+          PLENARY_DIR="$HOME/.local/share/nvim/plenary.nvim"
+          if [ ! -d "$PLENARY_DIR" ]; then
+            git clone --depth=1 https://github.com/nvim-lua/plenary.nvim "$PLENARY_DIR"
+          fi
+      - name: ACP headless smoke
+        run: |
+          nvim --headless -u tests/minimal_init.lua \
+            -c "lua require('tark').setup({auto_download=false, lsp={enabled=false}, ghost={enabled=false}})" \
+            -c "lua require('tark').chat_open()" \
+            -c "qa!"
+
+  compat-matrix:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tark/editors/neovim
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate README compatibility note
+        run: |
+          rg -n "ACP v2|Content-Length" README.md

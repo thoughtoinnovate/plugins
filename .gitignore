@@ -1,0 +1,7 @@
+# Rust/Cargo build artifacts
+**/target/
+
+# OS/editor noise
+.DS_Store
+*.swp
+*.swo

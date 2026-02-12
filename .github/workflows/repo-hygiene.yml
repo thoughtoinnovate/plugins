@@ -1,0 +1,25 @@
+name: repo-hygiene
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  tracked-build-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail on tracked target artifacts
+        run: |
+          if git ls-files | rg '/target/'; then
+            echo 'Tracked build artifacts detected under target/'
+            exit 1
+          fi
+      - name: Ensure clean worktree
+        run: |
+          if ! git diff --quiet || ! git diff --cached --quiet; then
+            echo 'Worktree became dirty during hygiene checks'
+            git status --short
+            exit 1
+          fi

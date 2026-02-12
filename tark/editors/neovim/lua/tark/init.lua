@@ -2,7 +2,7 @@
 
 local M = {}
 
-M.version = '0.11.6'
+M.version = '0.11.7'
 
 M.config = {
     binary = nil,
@@ -12,6 +12,7 @@ M.config = {
             position = 'right',
             width = 0.4,
             height = 0.5,
+            input_height = 3,
         },
         mode = 'ask',
         timeout_ms = 8000,
@@ -119,6 +120,12 @@ function M.setup(opts)
     get_acp().on('error/event', function(params)
         get_chat().on_error(params)
     end)
+    get_acp().on('approval/request', function(params)
+        get_chat().on_approval_request(params)
+    end)
+    get_acp().on('questionnaire/request', function(params)
+        get_chat().on_questionnaire_request(params)
+    end)
 end
 
 function M.chat_open()
@@ -143,6 +150,35 @@ function M.chat_toggle()
     end)
 end
 
+function M.chat_send(message)
+    local prompt = get_chat().consume_input_or(message)
+    if not prompt or prompt == '' then
+        return
+    end
+
+    local ctx = get_context().from_current_buffer()
+    get_chat().open()
+    get_chat().append_user(prompt)
+
+    get_acp().send_message(prompt, ctx, function(ok, result_or_err)
+        if ok then
+            get_chat().on_send_accepted(result_or_err.request_id)
+        else
+            get_chat().on_error({ message = result_or_err })
+        end
+    end)
+end
+
+function M.chat_cancel()
+    get_acp().cancel(function(ok, err)
+        if ok then
+            get_chat().on_error({ message = 'Request cancelled' })
+        else
+            get_chat().on_error({ message = err })
+        end
+    end)
+end
+
 function M.ask_buffer(question)
     local prompt = question
     if not prompt or prompt == '' then
@@ -153,9 +189,11 @@ function M.ask_buffer(question)
     get_chat().open()
     get_chat().append_user(prompt)
 
-    get_acp().send_message(prompt, ctx, function(ok, err)
-        if not ok then
-            get_chat().on_error({ message = err })
+    get_acp().send_message(prompt, ctx, function(ok, result_or_err)
+        if ok then
+            get_chat().on_send_accepted(result_or_err.request_id)
+        else
+            get_chat().on_error({ message = result_or_err })
         end
     end)
 end
@@ -170,9 +208,11 @@ function M.ask_selection(line1, line2, question)
     get_chat().open()
     get_chat().append_user(prompt)
 
-    get_acp().send_message(prompt, ctx, function(ok, err)
-        if not ok then
-            get_chat().on_error({ message = err })
+    get_acp().send_message(prompt, ctx, function(ok, result_or_err)
+        if ok then
+            get_chat().on_send_accepted(result_or_err.request_id)
+        else
+            get_chat().on_error({ message = result_or_err })
         end
     end)
 end
@@ -183,6 +223,54 @@ function M.set_mode(mode)
             vim.notify('tark mode: ' .. tostring(result_or_err.mode), vim.log.levels.INFO)
         else
             vim.notify('tark: mode switch failed: ' .. tostring(result_or_err), vim.log.levels.ERROR)
+        end
+    end)
+end
+
+function M.approve(decision)
+    local params = get_chat().pending_approval()
+    if not params then
+        vim.notify('tark: no pending approval', vim.log.levels.WARN)
+        return
+    end
+
+    get_acp().respond_approval(decision, params, function(ok, err)
+        if ok then
+            get_chat().clear_pending_approval()
+        else
+            get_chat().on_error({ message = err })
+        end
+    end)
+end
+
+function M.questionnaire_submit()
+    local params = get_chat().pending_questionnaire()
+    if not params then
+        vim.notify('tark: no pending questionnaire', vim.log.levels.WARN)
+        return
+    end
+
+    get_acp().respond_questionnaire(params, false, {}, function(ok, err)
+        if ok then
+            get_chat().clear_pending_questionnaire()
+        else
+            get_chat().on_error({ message = err })
+        end
+    end)
+end
+
+function M.questionnaire_cancel()
+    local params = get_chat().pending_questionnaire()
+    if not params then
+        vim.notify('tark: no pending questionnaire', vim.log.levels.WARN)
+        return
+    end
+
+    get_acp().respond_questionnaire(params, true, {}, function(ok, err)
+        if ok then
+            get_chat().clear_pending_questionnaire()
+        else
+            get_chat().on_error({ message = err })
         end
     end)
 end

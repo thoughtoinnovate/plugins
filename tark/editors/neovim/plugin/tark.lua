@@ -17,6 +17,17 @@ vim.api.nvim_create_user_command('TarkChatToggle', function()
     require('tark').chat_toggle()
 end, { desc = 'Toggle ACP chat widget' })
 
+vim.api.nvim_create_user_command('TarkChatSend', function(opts)
+    require('tark').chat_send(opts.args)
+end, {
+    nargs = '*',
+    desc = 'Send a chat message from widget input or argument',
+})
+
+vim.api.nvim_create_user_command('TarkChatCancel', function()
+    require('tark').chat_cancel()
+end, { desc = 'Cancel current ACP request' })
+
 vim.api.nvim_create_user_command('TarkAskBuffer', function(opts)
     require('tark').ask_buffer(opts.args)
 end, {
@@ -46,6 +57,29 @@ end, {
     end,
     desc = 'Set ACP session mode (ask|plan|build)',
 })
+
+vim.api.nvim_create_user_command('TarkApproval', function(opts)
+    local decision = opts.args
+    if decision == '' then
+        vim.notify('Usage: :TarkApproval approve_once|approve_session|approve_always|deny_once|deny_always', vim.log.levels.WARN)
+        return
+    end
+    require('tark').approve(decision)
+end, {
+    nargs = 1,
+    complete = function()
+        return { 'approve_once', 'approve_session', 'approve_always', 'deny_once', 'deny_always' }
+    end,
+    desc = 'Respond to pending ACP approval request',
+})
+
+vim.api.nvim_create_user_command('TarkQuestionnaireSubmit', function()
+    require('tark').questionnaire_submit()
+end, { desc = 'Submit pending questionnaire' })
+
+vim.api.nvim_create_user_command('TarkQuestionnaireCancel', function()
+    require('tark').questionnaire_cancel()
+end, { desc = 'Cancel pending questionnaire' })
 
 vim.api.nvim_create_user_command('TarkDownload', function()
     require('tark.binary').download()

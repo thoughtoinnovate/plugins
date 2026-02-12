@@ -1,4 +1,4 @@
--- ACP client for tark core (stdio JSON-RPC)
+-- ACP client for tark core (stdio JSON-RPC, Content-Length framing)
 
 local M = {}
 
@@ -9,6 +9,9 @@ M.state = {
     pending = {},
     handlers = {},
     connected = false,
+    read_buffer = '',
+    expected_len = nil,
+    current_request_id = nil,
 }
 
 M.config = {
@@ -42,32 +45,88 @@ local function resolve_binary()
     return binary.find()
 end
 
-local function on_stdout(_, data)
-    if not data then
+local function parse_frames(chunk)
+    if not chunk or chunk == '' then
         return
     end
 
-    for _, line in ipairs(data) do
-        if line and line ~= '' then
-            local msg = json_decode(line)
-            if msg and msg.id ~= nil and M.state.pending[msg.id] then
+    M.state.read_buffer = M.state.read_buffer .. chunk
+
+    while true do
+        if not M.state.expected_len then
+            local header_end = M.state.read_buffer:find('\r\n\r\n', 1, true)
+            local delim_len = 4
+            if not header_end then
+                header_end = M.state.read_buffer:find('\n\n', 1, true)
+                delim_len = 2
+            end
+
+            if not header_end then
+                return
+            end
+
+            local headers = M.state.read_buffer:sub(1, header_end - 1)
+            local len = headers:match('[Cc]ontent%-[Ll]ength:%s*(%d+)')
+            if not len then
+                M.state.read_buffer = M.state.read_buffer:sub(header_end + delim_len)
+                return
+            end
+
+            M.state.expected_len = tonumber(len)
+            M.state.read_buffer = M.state.read_buffer:sub(header_end + delim_len)
+        end
+
+        if not M.state.expected_len or #M.state.read_buffer < M.state.expected_len then
+            return
+        end
+
+        local body = M.state.read_buffer:sub(1, M.state.expected_len)
+        M.state.read_buffer = M.state.read_buffer:sub(M.state.expected_len + 1)
+        M.state.expected_len = nil
+
+        local msg = json_decode(body)
+        if msg then
+            if msg.id ~= nil and M.state.pending[msg.id] then
                 local cb = M.state.pending[msg.id]
                 M.state.pending[msg.id] = nil
                 vim.schedule(function()
                     cb(msg.error, msg.result)
                 end)
-            elseif msg and msg.method then
+            elseif msg.method then
                 dispatch_notification(msg)
             end
         end
     end
 end
 
+local function on_stdout(_, data)
+    if not data then
+        return
+    end
+
+    local chunks = {}
+    for i, part in ipairs(data) do
+        if part ~= nil then
+            if i < #data then
+                table.insert(chunks, part .. '\n')
+            else
+                table.insert(chunks, part)
+            end
+        end
+    end
+
+    parse_frames(table.concat(chunks, ''))
+end
+
 local function on_exit()
     M.state.connected = false
     M.state.session_id = nil
     M.state.job_id = nil
-    M.state.pending = {}
+    M.state.current_request_id = nil
+    for id, cb in pairs(M.state.pending) do
+        pcall(cb, { message = 'ACP process exited' }, nil)
+        M.state.pending[id] = nil
+    end
 end
 
 local function request(method, params, cb, timeout_ms)
@@ -81,14 +140,15 @@ local function request(method, params, cb, timeout_ms)
 
     M.state.pending[id] = cb
 
-    local payload = {
+    local payload = json_encode({
         jsonrpc = '2.0',
         id = id,
         method = method,
         params = params or {},
-    }
+    })
 
-    local ok = pcall(vim.fn.chansend, M.state.job_id, json_encode(payload) .. '\n')
+    local frame = string.format('Content-Length: %d\r\nContent-Type: application/json\r\n\r\n%s', #payload, payload)
+    local ok = pcall(vim.fn.chansend, M.state.job_id, frame)
     if not ok then
         M.state.pending[id] = nil
         cb({ message = 'Failed to write ACP request' }, nil)
@@ -112,7 +172,12 @@ local function parse_error(err)
         return nil
     end
     if type(err) == 'table' then
-        return err.message or vim.inspect(err)
+        local code = err.code or ((err.data or {}).code)
+        local msg = err.message or vim.inspect(err)
+        if code then
+            return tostring(code) .. ': ' .. tostring(msg)
+        end
+        return msg
     end
     return tostring(err)
 end
@@ -123,7 +188,7 @@ local function bootstrap(cb)
             name = 'tark.nvim',
             version = require('tark').version,
         },
-        versions = { '1' },
+        versions = { '2' },
     }, function(err)
         if err then
             cb(false, 'initialize failed: ' .. parse_error(err))
@@ -210,6 +275,7 @@ function M.send_message(message, context, cb)
             active_file = context and context.active_file or nil,
             cursor = context and context.cursor or nil,
             selection = context and context.selection or nil,
+            active_excerpt = context and context.active_excerpt or nil,
             buffers = context and context.buffers or {},
         }, function(ctx_err)
             if ctx_err then
@@ -225,6 +291,7 @@ function M.send_message(message, context, cb)
                     cb(false, 'session/send_message failed: ' .. parse_error(msg_err))
                     return
                 end
+                M.state.current_request_id = result and result.request_id or nil
                 cb(true, result)
             end)
         end)
@@ -262,6 +329,7 @@ function M.cancel(cb)
 
     request('session/cancel', {
         session_id = M.state.session_id,
+        request_id = M.state.current_request_id,
     }, function(err, result)
         if cb then
             if err then
@@ -270,6 +338,47 @@ function M.cancel(cb)
                 cb(true, result)
             end
         end
+    end)
+end
+
+function M.respond_approval(decision, params, cb)
+    if not M.state.session_id then
+        cb(false, 'No active ACP session')
+        return
+    end
+
+    request('approval/respond', {
+        session_id = M.state.session_id,
+        request_id = params.request_id,
+        interaction_id = params.interaction_id,
+        decision = decision,
+    }, function(err, result)
+        if err then
+            cb(false, parse_error(err))
+            return
+        end
+        cb(true, result)
+    end)
+end
+
+function M.respond_questionnaire(params, cancelled, answers, cb)
+    if not M.state.session_id then
+        cb(false, 'No active ACP session')
+        return
+    end
+
+    request('questionnaire/respond', {
+        session_id = M.state.session_id,
+        request_id = params.request_id,
+        interaction_id = params.interaction_id,
+        cancelled = cancelled,
+        answers = answers or {},
+    }, function(err, result)
+        if err then
+            cb(false, parse_error(err))
+            return
+        end
+        cb(true, result)
     end)
 end
 
