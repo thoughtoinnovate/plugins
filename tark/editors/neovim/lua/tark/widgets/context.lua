@@ -3,6 +3,42 @@ local M = {}
 local MAX_EXCERPT_BYTES = 20 * 1024
 local WINDOW_LINES = 120
 
+local function is_editor_widget_buffer(bufnr)
+    local name = vim.api.nvim_buf_get_name(bufnr)
+    return name:match('^tark://') ~= nil
+end
+
+local function pick_source_buffer()
+    local current = vim.api.nvim_get_current_buf()
+    if vim.api.nvim_buf_is_valid(current)
+        and vim.bo[current].buftype == ''
+        and not is_editor_widget_buffer(current)
+    then
+        return current
+    end
+
+    local alt = vim.fn.bufnr('#')
+    if alt > 0
+        and vim.api.nvim_buf_is_valid(alt)
+        and vim.bo[alt].buftype == ''
+        and not is_editor_widget_buffer(alt)
+    then
+        return alt
+    end
+
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+        local bufnr = vim.api.nvim_win_get_buf(win)
+        if vim.api.nvim_buf_is_valid(bufnr)
+            and vim.bo[bufnr].buftype == ''
+            and not is_editor_widget_buffer(bufnr)
+        then
+            return bufnr
+        end
+    end
+
+    return current
+end
+
 local function relpath(path)
     local cwd = vim.fn.getcwd()
     if path:sub(1, #cwd) == cwd then
@@ -50,9 +86,16 @@ local function excerpt_for_buffer(bufnr, cursor_line)
 end
 
 function M.from_current_buffer()
-    local bufnr = vim.api.nvim_get_current_buf()
+    local bufnr = pick_source_buffer()
     local path = vim.api.nvim_buf_get_name(bufnr)
-    local cursor = vim.api.nvim_win_get_cursor(0)
+    local cursor = { 1, 0 }
+
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+        if vim.api.nvim_win_get_buf(win) == bufnr then
+            cursor = vim.api.nvim_win_get_cursor(win)
+            break
+        end
+    end
 
     return {
         active_file = relpath(path),

@@ -574,7 +574,12 @@ end
 
 function M.on_final(params)
     if not state.current_stream then
-        table.insert(state.messages, { role = 'assistant', text = params.text or '' })
+        local text = params.text or ''
+        local last = state.messages[#state.messages]
+        local is_duplicate = last and last.role == 'assistant' and last.text == text
+        if not is_duplicate then
+            table.insert(state.messages, { role = 'assistant', text = text })
+        end
     else
         if params.text and params.text ~= '' then
             state.messages[state.current_stream].text = params.text

@@ -47,6 +47,13 @@ describe('chat widget - ACP integration', function()
         assert.equals('final', state.messages[1].text)
     end)
 
+    it('on_final does not append duplicate assistant message when stream is not active', function()
+        state.messages = { { role = 'assistant', text = 'same text' } }
+        state.current_stream = nil
+        chat.on_final({ text = 'same text' })
+        assert.equals(1, #state.messages)
+    end)
+
     it('tracks pending approval and questionnaire state', function()
         chat.on_approval_request({ interaction_id = 'itx-1', request_id = 'req-1', tool = 'shell' })
         assert.is_not_nil(chat.pending_approval())
