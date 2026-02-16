@@ -64,7 +64,9 @@ local function status_line()
         string.format('focus=%s', state.ui_focus or 'input'),
     }
 
-    if state.pending_approval then
+    if state.pending_permission then
+        table.insert(parts, 'permission=pending')
+    elseif state.pending_approval then
         table.insert(parts, 'approval=pending')
     end
     if state.pending_questionnaire then
@@ -171,7 +173,7 @@ local function apply_focus(target)
 end
 
 local function pending_interaction_exists()
-    return state.pending_approval ~= nil or state.pending_questionnaire ~= nil
+    return state.pending_permission ~= nil or state.pending_approval ~= nil or state.pending_questionnaire ~= nil
 end
 
 local function request_key(request_id)
@@ -248,7 +250,57 @@ render_transcript = function()
         push_line('')
     end
 
-    if state.pending_approval then
+    if state.pending_permission then
+        local permission = state.pending_permission
+        push_line('Permission Request')
+        if permission.title and permission.title ~= '' then
+            push_multiline('  title: ', permission.title)
+        end
+        if permission.tool and permission.tool ~= '' then
+            push_multiline('  tool: ', permission.tool)
+        end
+        if permission.command and permission.command ~= '' then
+            push_multiline('  command: ', permission.command)
+        end
+
+        local options = permission.options or {}
+        if #options == 0 then
+            push_line('  no permission options provided by server')
+        else
+            push_line('  options:')
+            for idx, option in ipairs(options) do
+                local selected = permission.selected_index == idx
+                local marker = selected and '>' or ' '
+                add_action('permission-option:' .. tostring(option.optionId or idx), function()
+                    permission.selected_index = idx
+                end, { kind = 'permission_option', data = { index = idx, option_id = option.optionId } })
+                push_line(string.format(
+                    '  %s [%s] %s',
+                    marker,
+                    selected and 'x' or ' ',
+                    sanitize_text(option.name or option.optionId or ('option-' .. idx))
+                ))
+            end
+        end
+
+        add_action('permission-submit', function()
+            local selected = options[permission.selected_index or 1]
+            local option_id = selected and selected.optionId or nil
+            if permission.respond then
+                permission.respond(option_id)
+            end
+            state.pending_permission = nil
+        end, { kind = 'permission_submit' })
+        add_action('permission-cancel', function()
+            if permission.respond then
+                permission.respond(nil)
+            end
+            state.pending_permission = nil
+        end, { kind = 'permission_cancel' })
+        push_line('  [submit] send selected option')
+        push_line('  [cancel] cancel permission request')
+        push_line('')
+    elseif state.pending_approval then
         local approval = state.pending_approval
         push_line('Approval Request')
         push_line(string.format('  tool=%s risk=%s', sanitize_text(approval.tool), sanitize_text(approval.risk)))
@@ -597,7 +649,12 @@ function M.toggle_selected_option()
     if not action then
         return
     end
-    if action.kind == 'question_multi' or action.kind == 'question_single' or action.kind == 'approval_decision' or action.kind == 'approval_pattern' then
+    if action.kind == 'question_multi'
+        or action.kind == 'question_single'
+        or action.kind == 'approval_decision'
+        or action.kind == 'approval_pattern'
+        or action.kind == 'permission_option'
+    then
         action.handler()
         render_transcript()
     end
@@ -715,6 +772,43 @@ function M.on_final(params)
     render_transcript()
 end
 
+function M.on_update(params)
+    local update = params.update or {}
+    local update_type = update.sessionUpdate
+
+    if update_type == 'agent_message_chunk' then
+        local content = update.content or {}
+        local text = content.text or ''
+        M.on_delta({
+            request_id = params.request_id,
+            delta = text,
+        })
+        return
+    end
+
+    if update_type == 'tool_call' then
+        local title = update.title or update.toolCallId or 'tool call'
+        table.insert(state.messages, { role = 'system', text = '[tool:start] ' .. title })
+        render_transcript()
+        return
+    end
+
+    if update_type == 'tool_call_update' then
+        local title = update.title or update.toolCallId or 'tool call'
+        local status = update.status or 'updated'
+        table.insert(state.messages, { role = 'system', text = string.format('[tool:%s] %s', status, title) })
+        render_transcript()
+        return
+    end
+
+    if update_type == 'current_mode_update' then
+        if update.currentModeId and update.currentModeId ~= '' then
+            state.mode = update.currentModeId
+        end
+        render_transcript()
+    end
+end
+
 function M.on_status(params)
     local was_busy = state.busy
     state.busy = params.busy == true
@@ -729,6 +823,34 @@ function M.on_status(params)
     elseif was_busy then
         stop_spinner()
     end
+    render_transcript()
+end
+
+function M.on_permission_request(params, respond)
+    local options = params.options or {}
+    local title = nil
+    local tool = nil
+    local command = nil
+    local tc = params.toolCall or {}
+    title = tc.title
+    command = tc.rawInput
+    if params._meta and params._meta.tark then
+        tool = params._meta.tark.tool
+    end
+
+    state.pending_permission = {
+        options = options,
+        selected_index = 1,
+        title = title,
+        tool = tool,
+        command = command,
+        respond = respond,
+    }
+    state.ui_focus = 'interaction'
+    table.insert(state.messages, {
+        role = 'system',
+        text = 'Permission requested by ACP server',
+    })
     render_transcript()
 end
 
@@ -806,6 +928,11 @@ function M.clear_pending_approval()
     render_transcript()
 end
 
+function M.clear_pending_permission()
+    state.pending_permission = nil
+    render_transcript()
+end
+
 function M.clear_pending_questionnaire()
     state.pending_questionnaire = nil
     render_transcript()
@@ -873,6 +1000,10 @@ function M.cancel_contextual()
 
     if state.pending_approval then
         return 'cancel_approval'
+    end
+
+    if state.pending_permission then
+        return 'cancel_permission'
     end
 
     if state.pending_questionnaire then

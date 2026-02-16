@@ -1,41 +1,41 @@
--- tark.nvim plugin entry point
+-- acp.nvim plugin entry point
 
 if vim.g.loaded_tark then
     return
 end
 vim.g.loaded_tark = true
 
-vim.api.nvim_create_user_command('TarkChatOpen', function()
+vim.api.nvim_create_user_command('AcpChatOpen', function()
     require('tark').chat_open()
 end, { desc = 'Open ACP chat widget' })
 
-vim.api.nvim_create_user_command('TarkChatClose', function()
+vim.api.nvim_create_user_command('AcpChatClose', function()
     require('tark').chat_close()
 end, { desc = 'Close ACP chat widget' })
 
-vim.api.nvim_create_user_command('TarkChatToggle', function()
+vim.api.nvim_create_user_command('AcpChatToggle', function()
     require('tark').chat_toggle()
 end, { desc = 'Toggle ACP chat widget' })
 
-vim.api.nvim_create_user_command('TarkChatSend', function(opts)
+vim.api.nvim_create_user_command('AcpSend', function(opts)
     require('tark').chat_send(opts.args)
 end, {
     nargs = '*',
     desc = 'Send a chat message from widget input or argument',
 })
 
-vim.api.nvim_create_user_command('TarkChatCancel', function()
+vim.api.nvim_create_user_command('AcpCancel', function()
     require('tark').chat_cancel()
 end, { desc = 'Cancel current ACP request' })
 
-vim.api.nvim_create_user_command('TarkAskBuffer', function(opts)
+vim.api.nvim_create_user_command('AcpAskBuffer', function(opts)
     require('tark').ask_buffer(opts.args)
 end, {
     nargs = '*',
     desc = 'Send current buffer as ACP context and ask a question',
 })
 
-vim.api.nvim_create_user_command('TarkAskSelection', function(opts)
+vim.api.nvim_create_user_command('AcpAskSelection', function(opts)
     require('tark').ask_selection(opts.line1, opts.line2, opts.args)
 end, {
     range = true,
@@ -43,10 +43,10 @@ end, {
     desc = 'Send selected lines as ACP context and ask a question',
 })
 
-vim.api.nvim_create_user_command('TarkMode', function(opts)
+vim.api.nvim_create_user_command('AcpMode', function(opts)
     local mode = opts.args
     if mode == '' then
-        vim.notify('Usage: :TarkMode ask|plan|build', vim.log.levels.WARN)
+        vim.notify('Usage: :AcpMode ask|plan|build', vim.log.levels.WARN)
         return
     end
     require('tark').set_mode(mode)
@@ -58,54 +58,72 @@ end, {
     desc = 'Set ACP session mode (ask|plan|build)',
 })
 
-vim.api.nvim_create_user_command('TarkApproval', function(opts)
-    local decision = opts.args
-    if decision == '' then
-        vim.notify('Usage: :TarkApproval approve_once|approve_session|approve_always|deny_once|deny_always', vim.log.levels.WARN)
+vim.api.nvim_create_user_command('AcpConfigSet', function(opts)
+    local parts = vim.split(opts.args, ' ', { plain = true, trimempty = true })
+    if #parts < 2 then
+        vim.notify('Usage: :AcpConfigSet <configId> <value>', vim.log.levels.WARN)
         return
     end
-    require('tark').approve(decision)
+    local config_id = parts[1]
+    table.remove(parts, 1)
+    local value = table.concat(parts, ' ')
+    require('tark').set_config_option(config_id, value)
 end, {
-    nargs = 1,
-    complete = function()
-        return { 'approve_once', 'approve_session', 'approve_always', 'deny_once', 'deny_always' }
-    end,
-    desc = 'Respond to pending ACP approval request',
+    nargs = '+',
+    desc = 'Set ACP session configuration option',
 })
 
-vim.api.nvim_create_user_command('TarkQuestionnaireSubmit', function()
-    require('tark').questionnaire_submit()
-end, { desc = 'Submit pending questionnaire' })
-
-vim.api.nvim_create_user_command('TarkQuestionnaireCancel', function()
-    require('tark').questionnaire_cancel()
-end, { desc = 'Cancel pending questionnaire' })
-
-vim.api.nvim_create_user_command('TarkUiFocus', function(opts)
+vim.api.nvim_create_user_command('AcpUiFocus', function(opts)
     require('tark').ui_focus(opts.args)
 end, {
     nargs = 1,
     complete = function()
         return { 'transcript', 'input', 'interaction' }
     end,
-    desc = 'Focus tark UI pane (transcript|input|interaction)',
+    desc = 'Focus ACP UI pane (transcript|input|interaction)',
 })
 
-vim.api.nvim_create_user_command('TarkUiNextAction', function()
+vim.api.nvim_create_user_command('AcpUiNextAction', function()
     require('tark').ui_next_action()
-end, { desc = 'Move to next interactive tark action' })
+end, { desc = 'Move to next interactive ACP action' })
 
-vim.api.nvim_create_user_command('TarkUiPrevAction', function()
+vim.api.nvim_create_user_command('AcpUiPrevAction', function()
     require('tark').ui_prev_action()
-end, { desc = 'Move to previous interactive tark action' })
+end, { desc = 'Move to previous interactive ACP action' })
 
-vim.api.nvim_create_user_command('TarkUiSubmit', function()
+vim.api.nvim_create_user_command('AcpUiSubmit', function()
     require('tark').ui_submit()
-end, { desc = 'Submit active tark UI action or send input' })
+end, { desc = 'Submit active ACP UI action or send input' })
 
-vim.api.nvim_create_user_command('TarkUiCancel', function()
+vim.api.nvim_create_user_command('AcpUiCancel', function()
     require('tark').ui_cancel()
-end, { desc = 'Cancel active tark UI interaction or request' })
+end, { desc = 'Cancel active ACP UI interaction or request' })
+
+-- Legacy aliases (deprecated)
+vim.api.nvim_create_user_command('TarkChatToggle', function() vim.cmd('AcpChatToggle') end, { desc = 'Deprecated alias for AcpChatToggle' })
+vim.api.nvim_create_user_command('TarkChatOpen', function() vim.cmd('AcpChatOpen') end, { desc = 'Deprecated alias for AcpChatOpen' })
+vim.api.nvim_create_user_command('TarkChatClose', function() vim.cmd('AcpChatClose') end, { desc = 'Deprecated alias for AcpChatClose' })
+vim.api.nvim_create_user_command('TarkChatSend', function(opts) vim.cmd('AcpSend ' .. opts.args) end, { nargs = '*', desc = 'Deprecated alias for AcpSend' })
+vim.api.nvim_create_user_command('TarkChatCancel', function() vim.cmd('AcpCancel') end, { desc = 'Deprecated alias for AcpCancel' })
+vim.api.nvim_create_user_command('TarkAskBuffer', function(opts) vim.cmd('AcpAskBuffer ' .. opts.args) end, { nargs = '*', desc = 'Deprecated alias for AcpAskBuffer' })
+vim.api.nvim_create_user_command('TarkAskSelection', function(opts) require('tark').ask_selection(opts.line1, opts.line2, opts.args) end, { range = true, nargs = '*', desc = 'Deprecated alias for AcpAskSelection' })
+vim.api.nvim_create_user_command('TarkMode', function(opts) vim.cmd('AcpMode ' .. opts.args) end, { nargs = 1, complete = function() return { 'ask', 'plan', 'build' } end, desc = 'Deprecated alias for AcpMode' })
+vim.api.nvim_create_user_command('TarkApproval', function(opts)
+    require('tark').approve(opts.args)
+end, {
+    nargs = 1,
+    complete = function()
+        return { 'approve_once', 'approve_session', 'approve_always', 'deny_once', 'deny_always' }
+    end,
+    desc = 'Deprecated legacy approval command',
+})
+vim.api.nvim_create_user_command('TarkQuestionnaireSubmit', function() require('tark').questionnaire_submit() end, { desc = 'Deprecated legacy questionnaire submit' })
+vim.api.nvim_create_user_command('TarkQuestionnaireCancel', function() require('tark').questionnaire_cancel() end, { desc = 'Deprecated legacy questionnaire cancel' })
+vim.api.nvim_create_user_command('TarkUiFocus', function(opts) vim.cmd('AcpUiFocus ' .. opts.args) end, { nargs = 1, complete = function() return { 'transcript', 'input', 'interaction' } end, desc = 'Deprecated alias for AcpUiFocus' })
+vim.api.nvim_create_user_command('TarkUiNextAction', function() vim.cmd('AcpUiNextAction') end, { desc = 'Deprecated alias for AcpUiNextAction' })
+vim.api.nvim_create_user_command('TarkUiPrevAction', function() vim.cmd('AcpUiPrevAction') end, { desc = 'Deprecated alias for AcpUiPrevAction' })
+vim.api.nvim_create_user_command('TarkUiSubmit', function() vim.cmd('AcpUiSubmit') end, { desc = 'Deprecated alias for AcpUiSubmit' })
+vim.api.nvim_create_user_command('TarkUiCancel', function() vim.cmd('AcpUiCancel') end, { desc = 'Deprecated alias for AcpUiCancel' })
 
 vim.api.nvim_create_user_command('TarkDownload', function()
     require('tark.binary').download()

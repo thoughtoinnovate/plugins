@@ -1,12 +1,24 @@
--- tark.nvim - ACP-based Neovim integration
+-- Generic ACP-based Neovim integration
 
 local M = {}
 
-M.version = '0.11.9'
+M.version = '0.12.0'
 
 M.config = {
     binary = nil,
     auto_download = true,
+    acp = {
+        command = nil,
+        args = nil,
+        env = {},
+        cwd = nil,
+        protocol_version = 1,
+        profile = 'generic',
+        client_capabilities = {
+            fs = { readTextFile = false, writeTextFile = false },
+            terminal = false,
+        },
+    },
     chat = {
         window = {
             position = 'right',
@@ -14,7 +26,7 @@ M.config = {
             height = 0.5,
             input_height = 3,
         },
-        timeout_ms = 8000,
+        timeout_ms = 15000,
     },
     lsp = {
         enabled = false,
@@ -85,9 +97,9 @@ function M.setup(opts)
     get_binary().setup(M.config)
 
     if M.config.auto_download then
-        local bin = get_binary().find()
-        if not bin then
-            vim.notify('tark: Binary not found. Downloading...', vim.log.levels.INFO)
+        local bin = get_binary().find(true)
+        if not bin and not M.config.acp.command then
+            vim.notify('acp.nvim: Binary not found. Downloading tark...', vim.log.levels.INFO)
             get_binary().download(function(success)
                 if success and M.config.lsp.enabled then
                     get_lsp().setup(M.config.lsp)
@@ -105,16 +117,13 @@ function M.setup(opts)
     end
 
     get_chat().setup(M.config.chat)
-    get_acp().setup(M.config.chat)
+    get_acp().setup(vim.tbl_deep_extend('force', M.config.chat, M.config.acp))
 
-    get_acp().on('response/delta', function(params)
-        get_chat().on_delta(params)
+    get_acp().on('session/update', function(params)
+        get_chat().on_update(params)
     end)
-    get_acp().on('response/final', function(params)
-        get_chat().on_final(params)
-    end)
-    get_acp().on('session/status', function(params)
-        get_chat().on_status(params)
+    get_acp().on('session/busy', function(params)
+        get_chat().on_status({ busy = params.busy == true })
     end)
     get_acp().on('error/event', function(params)
         get_chat().on_error(params)
@@ -122,11 +131,8 @@ function M.setup(opts)
     get_acp().on('client/queue', function(params)
         get_chat().on_queue(params.size or 0)
     end)
-    get_acp().on('approval/request', function(params)
-        get_chat().on_approval_request(params)
-    end)
-    get_acp().on('questionnaire/request', function(params)
-        get_chat().on_questionnaire_request(params)
+    get_acp().on('session/request_permission', function(params, respond)
+        get_chat().on_permission_request(params, respond)
     end)
 end
 
@@ -134,7 +140,7 @@ function M.chat_open()
     get_chat().open()
     get_acp().ensure_started(function(ok, err)
         if not ok then
-            vim.notify('tark: ' .. tostring(err), vim.log.levels.ERROR)
+            vim.notify('acp.nvim: ' .. tostring(err), vim.log.levels.ERROR)
         end
     end)
 end
@@ -147,7 +153,7 @@ function M.chat_toggle()
     get_chat().toggle()
     get_acp().ensure_started(function(ok, err)
         if not ok then
-            vim.notify('tark: ' .. tostring(err), vim.log.levels.ERROR)
+            vim.notify('acp.nvim: ' .. tostring(err), vim.log.levels.ERROR)
         end
     end)
 end
@@ -167,7 +173,7 @@ function M.chat_send(message)
             if result_or_err and result_or_err.queued then
                 get_chat().on_error({ code = 'queued', message = 'Request queued until current response completes' })
             else
-                get_chat().on_send_accepted(result_or_err.request_id)
+                get_chat().on_final({ text = '', request_id = tostring(vim.loop.hrtime()) })
             end
         else
             get_chat().on_error({ message = result_or_err })
@@ -190,20 +196,12 @@ function M.ask_buffer(question)
     if not prompt or prompt == '' then
         prompt = 'Analyze current buffer'
     end
-
     local ctx = get_context().from_current_buffer()
     get_chat().open()
     get_chat().append_user(prompt)
-
-    get_acp().send_message(prompt, ctx, function(ok, result_or_err)
-        if ok then
-            if result_or_err and result_or_err.queued then
-                get_chat().on_error({ code = 'queued', message = 'Request queued until current response completes' })
-            else
-                get_chat().on_send_accepted(result_or_err.request_id)
-            end
-        else
-            get_chat().on_error({ message = result_or_err })
+    get_acp().send_message(prompt, ctx, function(ok, err)
+        if not ok then
+            get_chat().on_error({ message = err })
         end
     end)
 end
@@ -213,20 +211,12 @@ function M.ask_selection(line1, line2, question)
     if not prompt or prompt == '' then
         prompt = 'Analyze selected code'
     end
-
     local ctx = get_context().from_visual_selection(line1, line2)
     get_chat().open()
     get_chat().append_user(prompt)
-
-    get_acp().send_message(prompt, ctx, function(ok, result_or_err)
-        if ok then
-            if result_or_err and result_or_err.queued then
-                get_chat().on_error({ code = 'queued', message = 'Request queued until current response completes' })
-            else
-                get_chat().on_send_accepted(result_or_err.request_id)
-            end
-        else
-            get_chat().on_error({ message = result_or_err })
+    get_acp().send_message(prompt, ctx, function(ok, err)
+        if not ok then
+            get_chat().on_error({ message = err })
         end
     end)
 end
@@ -234,48 +224,46 @@ end
 function M.set_mode(mode)
     get_acp().set_mode(mode, function(ok, result_or_err)
         if ok then
-            vim.notify('tark mode: ' .. tostring(result_or_err.mode), vim.log.levels.INFO)
+            vim.notify('acp mode: ' .. tostring(mode), vim.log.levels.INFO)
         else
-            vim.notify('tark: mode switch failed: ' .. tostring(result_or_err), vim.log.levels.ERROR)
+            vim.notify('acp: mode switch failed: ' .. tostring(result_or_err), vim.log.levels.ERROR)
         end
     end)
 end
 
+function M.set_config_option(config_id, value)
+    get_acp().set_config_option(config_id, value, function(ok, result_or_err)
+        if ok then
+            vim.notify('acp config updated: ' .. config_id, vim.log.levels.INFO)
+        else
+            vim.notify('acp: config update failed: ' .. tostring(result_or_err), vim.log.levels.ERROR)
+        end
+    end)
+end
+
+-- Backward-compatible wrapper
 function M.approve(decision)
     local params = get_chat().pending_approval()
     if not params then
-        vim.notify('tark: no pending approval', vim.log.levels.WARN)
+        vim.notify('acp: no pending approval', vim.log.levels.WARN)
         return
     end
-
-    get_acp().respond_approval(decision, params, function(ok, err)
-        if ok then
-            get_chat().clear_pending_approval()
-        else
-            get_chat().on_error({ message = err })
-        end
-    end)
+    get_chat().on_error({ message = 'Legacy approval commands are deprecated; use permission selection UI.' })
 end
 
 function M.questionnaire_submit()
     local params = get_chat().pending_questionnaire()
     if not params then
-        vim.notify('tark: no pending questionnaire', vim.log.levels.WARN)
+        vim.notify('acp: no pending questionnaire', vim.log.levels.WARN)
         return
     end
 
     if not get_chat().can_submit_questionnaire() then
-        vim.notify('tark: questionnaire validation failed', vim.log.levels.WARN)
+        vim.notify('acp: questionnaire validation failed', vim.log.levels.WARN)
         return
     end
 
-    get_acp().respond_questionnaire(params, false, get_chat().questionnaire_answers(), function(ok, err)
-        if ok then
-            get_chat().clear_pending_questionnaire()
-        else
-            get_chat().on_error({ message = err })
-        end
-    end)
+    get_chat().clear_pending_questionnaire()
 end
 
 function M.ui_focus(target)
@@ -294,15 +282,17 @@ function M.ui_submit()
     local result = get_chat().submit_contextual()
     if result == 'send_message' then
         M.chat_send()
-    elseif result == 'questionnaire_submit' or result == 'action_executed' then
-        -- handled by action callback
     end
 end
 
 function M.ui_cancel()
     local action = get_chat().cancel_contextual()
-    if action == 'cancel_approval' then
-        M.approve('deny_once')
+    if action == 'cancel_permission' then
+        local pending = require('tark.widgets.state').pending_permission
+        if pending and pending.respond then
+            pending.respond(nil)
+        end
+        get_chat().clear_pending_permission()
     elseif action == 'cancel_questionnaire' then
         M.questionnaire_cancel()
     elseif action == 'cancel_request' then
@@ -313,17 +303,10 @@ end
 function M.questionnaire_cancel()
     local params = get_chat().pending_questionnaire()
     if not params then
-        vim.notify('tark: no pending questionnaire', vim.log.levels.WARN)
+        vim.notify('acp: no pending questionnaire', vim.log.levels.WARN)
         return
     end
-
-    get_acp().respond_questionnaire(params, true, {}, function(ok, err)
-        if ok then
-            get_chat().clear_pending_questionnaire()
-        else
-            get_chat().on_error({ message = err })
-        end
-    end)
+    get_chat().clear_pending_questionnaire()
 end
 
 -- LSP API

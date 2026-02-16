@@ -1,4 +1,4 @@
--- ACP client for tark core (stdio JSON-RPC, Content-Length framing)
+-- Generic ACP client over stdio JSON-RPC (Content-Length framing)
 
 local M = {}
 
@@ -11,14 +11,23 @@ M.state = {
     connected = false,
     read_buffer = '',
     expected_len = nil,
-    current_request_id = nil,
     busy = false,
     send_queue = {},
     draining = false,
 }
 
 M.config = {
-    timeout_ms = 8000,
+    timeout_ms = 15000,
+    command = nil,
+    args = nil,
+    env = {},
+    cwd = nil,
+    protocol_version = 1,
+    client_capabilities = {
+        fs = { readTextFile = false, writeTextFile = false },
+        terminal = false,
+    },
+    profile = 'generic',
 }
 
 local function json_decode(raw)
@@ -71,27 +80,6 @@ local function emit_queue_update()
     emit('client/queue', { size = #M.state.send_queue })
 end
 
-local function resolve_binary()
-    local binary = require('tark.binary')
-    return binary.find(true)
-end
-
-local function is_session_not_found(err)
-    if type(err) ~= 'table' then
-        return false
-    end
-    local data = err.data or {}
-    return data.code == 'session_not_found'
-end
-
-local function is_session_busy(err)
-    if type(err) ~= 'table' then
-        return false
-    end
-    local data = err.data or {}
-    return data.code == 'session_busy'
-end
-
 local function normalize_request_error(reason)
     if reason == 'timeout' then
         return { code = 'request_timeout', message = 'ACP request timeout' }
@@ -103,6 +91,134 @@ local function normalize_request_error(reason)
         return { code = 'protocol_error', message = 'ACP protocol decode failure' }
     end
     return { code = 'unknown_error', message = tostring(reason or 'ACP request failed') }
+end
+
+local function send_frame(payload_table)
+    if not M.state.connected or not M.state.job_id then
+        return false
+    end
+    local payload = json_encode(payload_table)
+    local frame = string.format('Content-Length: %d\r\nContent-Type: application/json\r\n\r\n%s', #payload, payload)
+    return pcall(vim.fn.chansend, M.state.job_id, frame)
+end
+
+local function fail_pending_requests(reason)
+    local err = normalize_request_error(reason)
+    for id, cb in pairs(M.state.pending) do
+        pcall(cb, { code = err.code, message = err.message, data = { code = err.code } }, nil)
+        M.state.pending[id] = nil
+    end
+end
+
+local function on_exit()
+    M.state.connected = false
+    M.state.session_id = nil
+    M.state.job_id = nil
+    M.state.busy = false
+    M.state.read_buffer = ''
+    M.state.expected_len = nil
+    fail_pending_requests('process_exit')
+    emit('session/disconnected', { code = 'process_exit' })
+end
+
+local function request(method, params, cb, timeout_ms)
+    if not M.state.connected or not M.state.job_id then
+        cb({ code = 'not_connected', message = 'ACP not connected', data = { code = 'not_connected' } }, nil)
+        return
+    end
+
+    local id = M.state.next_id
+    M.state.next_id = id + 1
+    M.state.pending[id] = cb
+
+    local ok = send_frame({
+        jsonrpc = '2.0',
+        id = id,
+        method = method,
+        params = params or {},
+    })
+
+    if not ok then
+        M.state.pending[id] = nil
+        cb({ code = 'write_failed', message = 'Failed to write ACP request', data = { code = 'write_failed' } }, nil)
+        return
+    end
+
+    local timeout = timeout_ms or M.config.timeout_ms
+    if timeout and timeout > 0 then
+        vim.defer_fn(function()
+            local pending = M.state.pending[id]
+            if pending then
+                M.state.pending[id] = nil
+                local err = normalize_request_error('timeout')
+                pending({ code = err.code, message = err.message, data = { code = err.code } }, nil)
+            end
+        end, timeout)
+    end
+end
+
+local function build_permission_outcome(option_id)
+    if not option_id or option_id == '' then
+        return { outcome = 'cancelled' }
+    end
+    return { outcome = 'selected', optionId = option_id }
+end
+
+local function write_response(id, result, err)
+    local payload = {
+        jsonrpc = '2.0',
+        id = id,
+    }
+    if err then
+        payload.error = err
+    else
+        payload.result = result or {}
+    end
+    send_frame(payload)
+end
+
+local function handle_server_request(msg)
+    local method = msg.method
+    local params = msg.params or {}
+
+    if method == 'session/request_permission' then
+        local handled = false
+        local handler = M.state.handlers['session/request_permission']
+        if handler then
+            vim.schedule(function()
+                local ok = pcall(handler, params, function(option_id)
+                    write_response(msg.id, { outcome = build_permission_outcome(option_id) }, nil)
+                end)
+                if not ok then
+                    write_response(msg.id, { outcome = { outcome = 'cancelled' } }, nil)
+                end
+            end)
+            handled = true
+        end
+        if not handled then
+            write_response(msg.id, { outcome = { outcome = 'cancelled' } }, nil)
+        end
+        return
+    end
+
+    if method == 'fs/read_text_file' and M.config.client_capabilities.fs.readTextFile then
+        local path = params.path
+        local lines = vim.fn.readfile(path)
+        local content = table.concat(lines, '\n')
+        write_response(msg.id, { content = content }, nil)
+        return
+    end
+
+    if method == 'fs/write_text_file' and M.config.client_capabilities.fs.writeTextFile then
+        local path = params.path
+        local content = params.content or ''
+        local out = vim.split(content, '\n', { plain = true, trimempty = false })
+        vim.fn.writefile(out, path)
+        write_response(msg.id, { ok = true }, nil)
+        return
+    end
+
+    write_response(msg.id, nil, { code = -32601, message = 'Method not found' })
 end
 
 local function parse_frames(chunk)
@@ -154,29 +270,10 @@ local function parse_frames(chunk)
             vim.schedule(function()
                 cb(msg.error, msg.result)
             end)
+        elseif msg.id ~= nil and msg.method then
+            handle_server_request(msg)
         elseif msg.method then
-            if msg.method == 'session/status' then
-                local params = msg.params or {}
-                M.state.busy = params.busy == true
-                emit('session/status', vim.tbl_extend('force', params, { queue_size = #M.state.send_queue }))
-                if not M.state.busy then
-                    vim.defer_fn(function()
-                        if M.try_drain_queue then
-                            M.try_drain_queue()
-                        end
-                    end, 10)
-                end
-            elseif msg.method == 'response/final' then
-                M.state.current_request_id = nil
-                emit('response/final', msg.params or {})
-                vim.defer_fn(function()
-                    if M.try_drain_queue then
-                        M.try_drain_queue()
-                    end
-                end, 10)
-            else
-                emit(msg.method, msg.params or {})
-            end
+            emit(msg.method, msg.params or {})
         end
     end
 end
@@ -200,71 +297,33 @@ local function on_stdout(_, data)
     parse_frames(table.concat(chunks, ''))
 end
 
-local function fail_pending_requests(reason)
-    local err = normalize_request_error(reason)
-    for id, cb in pairs(M.state.pending) do
-        pcall(cb, { code = err.code, message = err.message, data = { code = err.code } }, nil)
-        M.state.pending[id] = nil
-    end
-end
-
-local function on_exit()
-    M.state.connected = false
-    M.state.session_id = nil
-    M.state.job_id = nil
-    M.state.current_request_id = nil
-    M.state.busy = false
-    M.state.read_buffer = ''
-    M.state.expected_len = nil
-    fail_pending_requests('process_exit')
-end
-
-local function request(method, params, cb, timeout_ms)
-    if not M.state.connected or not M.state.job_id then
-        cb({ code = 'not_connected', message = 'ACP not connected', data = { code = 'not_connected' } }, nil)
-        return
+local function resolve_command()
+    if M.config.command and M.config.command ~= '' then
+        local args = M.config.args or {}
+        local cmd = { M.config.command }
+        for _, arg in ipairs(args) do
+            table.insert(cmd, arg)
+        end
+        return cmd
     end
 
-    local id = M.state.next_id
-    M.state.next_id = id + 1
-
-    M.state.pending[id] = cb
-
-    local payload = json_encode({
-        jsonrpc = '2.0',
-        id = id,
-        method = method,
-        params = params or {},
-    })
-
-    local frame = string.format('Content-Length: %d\r\nContent-Type: application/json\r\n\r\n%s', #payload, payload)
-    local ok = pcall(vim.fn.chansend, M.state.job_id, frame)
-    if not ok then
-        M.state.pending[id] = nil
-        cb({ code = 'write_failed', message = 'Failed to write ACP request', data = { code = 'write_failed' } }, nil)
-        return
+    local binary = require('tark.binary')
+    local bin = binary.find(true)
+    if not bin then
+        return nil
     end
 
-    local timeout = timeout_ms or M.config.timeout_ms
-    if timeout and timeout > 0 then
-        vim.defer_fn(function()
-            local pending = M.state.pending[id]
-            if pending then
-                M.state.pending[id] = nil
-                local err = normalize_request_error('timeout')
-                pending({ code = err.code, message = err.message, data = { code = err.code } }, nil)
-            end
-        end, timeout)
-    end
+    return { bin, 'acp', '--cwd', M.config.cwd or vim.fn.getcwd() }
 end
 
 local function bootstrap(cb)
     request('initialize', {
-        client = {
+        protocolVersion = M.config.protocol_version,
+        clientCapabilities = M.config.client_capabilities,
+        clientInfo = {
             name = 'tark.nvim',
             version = require('tark').version,
         },
-        versions = { '2' },
     }, function(err)
         if err then
             local parsed = parse_error(err)
@@ -272,24 +331,27 @@ local function bootstrap(cb)
             return
         end
 
-        local create_params = { cwd = vim.fn.getcwd() }
-        if M.config.mode and M.config.mode ~= '' then
-            create_params.mode = M.config.mode
-        end
-
-        request('session/create', create_params, function(create_err, create_result)
+        request('session/new', {
+            cwd = M.config.cwd or vim.fn.getcwd(),
+            mcpServers = {},
+        }, function(create_err, create_result)
             if create_err then
                 local parsed = parse_error(create_err)
-                cb(false, string.format('session/create failed: %s', parsed.message))
+                cb(false, string.format('session/new failed: %s', parsed.message))
                 return
             end
 
-            M.state.session_id = create_result and create_result.session_id or nil
+            M.state.session_id = create_result and (create_result.sessionId or create_result.session_id) or nil
             if not M.state.session_id then
-                cb(false, 'session/create returned no session_id')
+                cb(false, 'session/new returned no sessionId')
                 return
             end
 
+            emit('session/started', {
+                session_id = M.state.session_id,
+                modes = create_result.modes,
+                config_options = create_result.configOptions,
+            })
             cb(true, nil)
         end)
     end)
@@ -307,59 +369,77 @@ local function queue_send(message, context, cb)
     cb(true, { queued = true, local_id = M.state.send_queue[#M.state.send_queue].local_id })
 end
 
-local function send_message_once(message, context, cb, allow_retry)
-    request('context/update', {
-        session_id = M.state.session_id,
-        active_file = context and context.active_file or nil,
-        cursor = context and context.cursor or nil,
-        selection = context and context.selection or nil,
-        active_excerpt = context and context.active_excerpt or nil,
-        buffers = context and context.buffers or {},
-    }, function(ctx_err)
-        if ctx_err then
-            if allow_retry and is_session_not_found(ctx_err) then
-                bootstrap(function(ok, boot_err)
-                    if not ok then
-                        cb(false, 'context/update failed: ' .. tostring(boot_err))
-                        return
-                    end
-                    send_message_once(message, context, cb, false)
-                end)
-                return
+local function context_to_text(context)
+    if not context then
+        return ''
+    end
+
+    local lines = {}
+    if context.active_file or context.cursor or context.selection or context.active_excerpt then
+        table.insert(lines, '[Editor Context]')
+        if context.active_file then
+            table.insert(lines, 'Active file: ' .. context.active_file)
+        end
+        if context.cursor then
+            table.insert(lines, string.format('Cursor: line %s, col %s', context.cursor.line, context.cursor.col))
+        end
+        if context.active_excerpt and context.active_excerpt ~= '' then
+            table.insert(lines, 'Active excerpt:')
+            table.insert(lines, '```')
+            table.insert(lines, context.active_excerpt)
+            table.insert(lines, '```')
+        end
+        if context.selection and context.selection.text and context.selection.text ~= '' then
+            table.insert(lines, 'Selection:')
+            table.insert(lines, '```')
+            table.insert(lines, context.selection.text)
+            table.insert(lines, '```')
+        end
+        if context.buffers and #context.buffers > 0 then
+            table.insert(lines, 'Open buffers:')
+            for _, b in ipairs(context.buffers) do
+                table.insert(lines, '- ' .. (b.name or b.path or '<unknown>'))
             end
-            local parsed = parse_error(ctx_err)
-            cb(false, string.format('context/update failed: %s', parsed.message))
+        end
+        table.insert(lines, '')
+        table.insert(lines, '[User Request]')
+    end
+
+    return table.concat(lines, '\n')
+end
+
+local function send_message_once(message, context, cb)
+    local pref = context_to_text(context)
+    local text = message
+    if pref ~= '' then
+        text = pref .. '\n' .. message
+    end
+
+    M.state.busy = true
+    emit('session/busy', { busy = true })
+
+    request('session/prompt', {
+        sessionId = M.state.session_id,
+        prompt = {
+            { type = 'text', text = text },
+        },
+    }, function(msg_err, result)
+        M.state.busy = false
+        emit('session/busy', { busy = false })
+
+        if msg_err then
+            local parsed = parse_error(msg_err)
+            cb(false, string.format('session/prompt failed: %s', parsed.message))
+            vim.defer_fn(function()
+                M.try_drain_queue()
+            end, 10)
             return
         end
 
-        request('session/send_message', {
-            session_id = M.state.session_id,
-            message = message,
-        }, function(msg_err, result)
-            if msg_err then
-                if is_session_busy(msg_err) then
-                    queue_send(message, context, cb)
-                    return
-                end
-                if allow_retry and is_session_not_found(msg_err) then
-                    bootstrap(function(ok, boot_err)
-                        if not ok then
-                            cb(false, 'session/send_message failed: ' .. tostring(boot_err))
-                            return
-                        end
-                        send_message_once(message, context, cb, false)
-                    end)
-                    return
-                end
-                local parsed = parse_error(msg_err)
-                cb(false, string.format('session/send_message failed: %s', parsed.message))
-                return
-            end
-
-            M.state.current_request_id = result and result.request_id or nil
-            M.state.busy = true
-            cb(true, result)
-        end)
+        cb(true, result or { stopReason = 'end_turn' })
+        vim.defer_fn(function()
+            M.try_drain_queue()
+        end, 10)
     end)
 end
 
@@ -377,29 +457,32 @@ function M.ensure_started(cb)
         return
     end
 
-    local bin = resolve_binary()
-    if not bin then
-        cb(false, 'No ACP-compatible tark binary found. Update/install tark and run :TarkVersion')
+    local cmd = resolve_command()
+    if not cmd then
+        cb(false, 'No ACP-compatible command found. Configure acp.command or install tark with ACP support.')
         return
     end
 
     if not M.state.job_id then
-        local job_id = vim.fn.jobstart({ bin, 'acp', '--cwd', vim.fn.getcwd() }, {
+        local opts = {
             stdout_buffered = false,
             stderr_buffered = false,
             on_stdout = on_stdout,
             on_stderr = function(_, lines)
                 if lines and #lines > 0 and lines[1] ~= '' then
                     vim.schedule(function()
-                        vim.notify('tark ACP stderr: ' .. table.concat(lines, '\n'), vim.log.levels.DEBUG)
+                        vim.notify('ACP stderr: ' .. table.concat(lines, '\n'), vim.log.levels.DEBUG)
                     end)
                 end
             end,
             on_exit = on_exit,
-        })
+            cwd = M.config.cwd or vim.fn.getcwd(),
+            env = M.config.env,
+        }
+        local job_id = vim.fn.jobstart(cmd, opts)
 
         if type(job_id) ~= 'number' or job_id <= 0 then
-            cb(false, 'Failed to start tark ACP process')
+            cb(false, 'Failed to start ACP process')
             return
         end
 
@@ -422,15 +505,12 @@ function M.send_message(message, context, cb)
             return
         end
 
-        send_message_once(message, context, cb, true)
+        send_message_once(message, context, cb)
     end)
 end
 
 function M.try_drain_queue()
-    if M.state.draining then
-        return
-    end
-    if M.state.busy then
+    if M.state.draining or M.state.busy then
         return
     end
     if #M.state.send_queue == 0 then
@@ -464,16 +544,37 @@ function M.set_mode(mode, cb)
         end
 
         request('session/set_mode', {
-            session_id = M.state.session_id,
-            mode = mode,
+            sessionId = M.state.session_id,
+            modeId = mode,
         }, function(set_err, result)
             if set_err then
                 local parsed = parse_error(set_err)
                 cb(false, parsed.message)
                 return
             end
-            M.config.mode = result.mode or mode
-            cb(true, result)
+            cb(true, result or {})
+        end)
+    end)
+end
+
+function M.set_config_option(config_id, value, cb)
+    M.ensure_started(function(ok, err)
+        if not ok then
+            cb(false, err)
+            return
+        end
+
+        request('session/set_config_option', {
+            sessionId = M.state.session_id,
+            configId = config_id,
+            value = value,
+        }, function(set_err, result)
+            if set_err then
+                local parsed = parse_error(set_err)
+                cb(false, parsed.message)
+                return
+            end
+            cb(true, result or {})
         end)
     end)
 end
@@ -487,65 +588,40 @@ function M.cancel(cb)
     end
 
     request('session/cancel', {
-        session_id = M.state.session_id,
-        request_id = M.state.current_request_id,
+        sessionId = M.state.session_id,
     }, function(err, result)
         if err then
             local parsed = parse_error(err)
-            cb(false, parsed.message)
+            if cb then
+                cb(false, parsed.message)
+            end
             return
         end
-        M.state.current_request_id = nil
         M.state.busy = false
-        cb(true, result)
+        if cb then
+            cb(true, result or { cancelled = true })
+        end
         vim.defer_fn(function()
             M.try_drain_queue()
         end, 10)
     end)
 end
 
-function M.respond_approval(decision, params, cb)
-    if not M.state.session_id then
-        cb(false, 'No active ACP session')
-        return
+-- Legacy compatibility wrappers
+function M.respond_approval(_decision, _params, cb)
+    if cb then
+        cb(false, 'Legacy approval/respond is not supported in generic ACP mode')
     end
-
-    request('approval/respond', {
-        session_id = M.state.session_id,
-        request_id = params.request_id,
-        interaction_id = params.interaction_id,
-        decision = decision,
-        selected_pattern = params.selected_pattern,
-    }, function(err, result)
-        if err then
-            local parsed = parse_error(err)
-            cb(false, parsed.message)
-            return
-        end
-        cb(true, result)
-    end)
 end
 
-function M.respond_questionnaire(params, cancelled, answers, cb)
-    if not M.state.session_id then
-        cb(false, 'No active ACP session')
-        return
+function M.respond_questionnaire(_params, _cancelled, _answers, cb)
+    if cb then
+        cb(false, 'Legacy questionnaire/respond is not supported in generic ACP mode')
     end
+end
 
-    request('questionnaire/respond', {
-        session_id = M.state.session_id,
-        request_id = params.request_id,
-        interaction_id = params.interaction_id,
-        cancelled = cancelled,
-        answers = answers or {},
-    }, function(err, result)
-        if err then
-            local parsed = parse_error(err)
-            cb(false, parsed.message)
-            return
-        end
-        cb(true, result)
-    end)
+function M.select_permission_option(option_id)
+    emit('session/permission_select', { option_id = option_id })
 end
 
 function M.queue_size()

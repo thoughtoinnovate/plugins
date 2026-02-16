@@ -20,6 +20,7 @@ local M = {
     active_request_id = nil,
 
     pending_approval = nil,
+    pending_permission = nil,
     pending_questionnaire = nil,
 
     ui_focus = 'input',

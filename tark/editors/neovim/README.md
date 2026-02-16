@@ -1,6 +1,6 @@
-# tark.nvim (ACP Widget Client)
+# tark.nvim (Generic ACP Widget Client)
 
-Neovim ACP widget client for `tark`.
+Neovim ACP widget client for any ACP-compatible agent (with a Tark compatibility profile).
 
 This plugin lives outside the core repo under the plugins monorepo path:
 `plugins/tark/editors/neovim`.
@@ -12,7 +12,7 @@ return {
   dir = "~/code/plugins/tark/editors/neovim",
   lazy = false,
   keys = {
-    { "<leader>tc", "<cmd>TarkChatToggle<cr>", desc = "Toggle tark chat" },
+    { "<leader>ac", "<cmd>AcpChatToggle<cr>", desc = "Toggle ACP chat" },
   },
 }
 ```
@@ -28,34 +28,33 @@ return {
     vim.opt.rtp:prepend(plugin.dir .. "/tark/editors/neovim")
   end,
   keys = {
-    { "<leader>tc", "<cmd>TarkChatToggle<cr>", desc = "Toggle tark chat" },
+    { "<leader>ac", "<cmd>AcpChatToggle<cr>", desc = "Toggle ACP chat" },
   },
 }
 ```
 
 Git-based plugin managers clone repositories, not single folders. If you want only `tark/editors/neovim`, use sparse checkout and then point Lazy.nvim to local `dir`.
 
-## Core requirements
+## Requirements
 
-- `tark` binary installed and on `PATH` (or configure `binary` path).
+- ACP-compatible binary installed and on `PATH` (or configure `acp.command` and `acp.args`).
 - Neovim `0.9+`.
-- Core `tark` supports `tark acp --cwd <project>` and ACP v2 Content-Length framing.
+- Agent supports Content-Length framed JSON-RPC (ACP).
 
 ## ACP widget workflow
 
-- `:TarkChatToggle` / `:TarkChatOpen` opens ACP chat widget.
-- `:TarkChatClose` closes chat widget.
-- `:TarkAskBuffer [question]` sends current buffer context to ACP session.
-- `:'<,'>TarkAskSelection [question]` sends selected lines and range metadata.
-- `:TarkChatSend [message]` sends from input pane or argument.
-- `:TarkChatCancel` cancels active ACP request.
-- `:TarkMode ask|plan|build` changes ACP session mode.
-- `:TarkApproval ...` and questionnaire commands handle interactive tool gates.
-- `:TarkUiFocus transcript|input|interaction` moves focus between panes.
-- `:TarkUiNextAction` / `:TarkUiPrevAction` navigates interactive actions.
-- `:TarkUiSubmit` submits active interaction action or sends input text.
-- `:TarkUiCancel` cancels active interaction/request contextually.
-- Completion provider/model remain managed by local `tark` configuration.
+- `:AcpChatToggle` / `:AcpChatOpen` opens ACP chat widget.
+- `:AcpChatClose` closes chat widget.
+- `:AcpAskBuffer [question]` sends current buffer context.
+- `:'<,'>AcpAskSelection [question]` sends selected lines and range metadata.
+- `:AcpSend [message]` sends from input pane or argument.
+- `:AcpCancel` cancels active ACP request.
+- `:AcpMode ask|plan|build` changes agent mode when supported.
+- `:AcpConfigSet <configId> <value>` sets ACP config options when supported.
+- `:AcpUiFocus transcript|input|interaction` moves focus between panes.
+- `:AcpUiNextAction` / `:AcpUiPrevAction` navigates interactive actions.
+- `:AcpUiSubmit` submits active interaction action or sends input text.
+- `:AcpUiCancel` cancels active interaction/request contextually.
 
 ### Interactive keymaps (buffer-local in Tark widget)
 
@@ -71,10 +70,38 @@ Git-based plugin managers clone repositories, not single folders. If you want on
   - `Esc`: leave free-text edit mode
   - `Ctrl-C`: cancel active interaction/request
 
+## ACP configuration
+
+```lua
+require("tark").setup({
+  acp = {
+    command = "tark",           -- nil => auto-detect tark binary
+    args = { "acp" },           -- optional
+    env = {},                   -- extra env for ACP process
+    cwd = nil,                  -- nil => current working directory
+    protocol_version = 1,
+    profile = "auto",           -- auto | generic | tark_extension
+    client_capabilities = {
+      fs = { readTextFile = false, writeTextFile = false },
+      terminal = false,
+    },
+  },
+})
+```
+
+## Compatibility matrix
+
+| Agent profile | initialize | session/new | prompt stream | cancel | permission request |
+|---|---|---|---|---|---|
+| Codex ACP | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Gemini ACP | ✅ | ✅ | ✅ | ✅ | capability fallback |
+| JetBrains ACP | ✅ | ✅ | ✅ | ✅ | capability fallback |
+
 ## Breaking migration
 
+- Primary command namespace is now `:Acp*`.
+- Legacy `:Tark*` chat commands are still provided as compatibility aliases.
 - Removed terminal embedding commands: `:Tark`, `:TarkToggle`, `:TarkOpen`, `:TarkClose`.
-- Chat no longer uses core `/chat` editor payload path.
 
 ## Tests
 
