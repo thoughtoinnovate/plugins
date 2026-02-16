@@ -607,17 +607,31 @@ function M.cancel(cb)
     end)
 end
 
--- Legacy compatibility wrappers
-function M.respond_approval(_decision, _params, cb)
-    if cb then
-        cb(false, 'Legacy approval/respond is not supported in generic ACP mode')
-    end
-end
+function M.inline_completion(params, cb)
+    M.ensure_started(function(ok, err)
+        if not ok then
+            cb(false, err)
+            return
+        end
 
-function M.respond_questionnaire(_params, _cancelled, _answers, cb)
-    if cb then
-        cb(false, 'Legacy questionnaire/respond is not supported in generic ACP mode')
-    end
+        request('tark/inline_completion', {
+            sessionId = M.state.session_id,
+            path = params.path,
+            cursor = params.cursor,
+            prefix = params.prefix,
+            suffix = params.suffix,
+            maxTokens = params.max_tokens,
+            language = params.language,
+            triggerKind = params.trigger_kind,
+        }, function(req_err, result)
+            if req_err then
+                local parsed = parse_error(req_err)
+                cb(false, parsed.message)
+                return
+            end
+            cb(true, result or {})
+        end, params.timeout_ms)
+    end)
 end
 
 function M.select_permission_option(option_id)
@@ -626,6 +640,10 @@ end
 
 function M.queue_size()
     return #M.state.send_queue
+end
+
+function M.is_connected()
+    return M.state.connected and M.state.session_id ~= nil
 end
 
 function M.close()

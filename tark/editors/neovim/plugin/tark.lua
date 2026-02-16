@@ -99,32 +99,6 @@ vim.api.nvim_create_user_command('AcpUiCancel', function()
     require('tark').ui_cancel()
 end, { desc = 'Cancel active ACP UI interaction or request' })
 
--- Legacy aliases (deprecated)
-vim.api.nvim_create_user_command('TarkChatToggle', function() vim.cmd('AcpChatToggle') end, { desc = 'Deprecated alias for AcpChatToggle' })
-vim.api.nvim_create_user_command('TarkChatOpen', function() vim.cmd('AcpChatOpen') end, { desc = 'Deprecated alias for AcpChatOpen' })
-vim.api.nvim_create_user_command('TarkChatClose', function() vim.cmd('AcpChatClose') end, { desc = 'Deprecated alias for AcpChatClose' })
-vim.api.nvim_create_user_command('TarkChatSend', function(opts) vim.cmd('AcpSend ' .. opts.args) end, { nargs = '*', desc = 'Deprecated alias for AcpSend' })
-vim.api.nvim_create_user_command('TarkChatCancel', function() vim.cmd('AcpCancel') end, { desc = 'Deprecated alias for AcpCancel' })
-vim.api.nvim_create_user_command('TarkAskBuffer', function(opts) vim.cmd('AcpAskBuffer ' .. opts.args) end, { nargs = '*', desc = 'Deprecated alias for AcpAskBuffer' })
-vim.api.nvim_create_user_command('TarkAskSelection', function(opts) require('tark').ask_selection(opts.line1, opts.line2, opts.args) end, { range = true, nargs = '*', desc = 'Deprecated alias for AcpAskSelection' })
-vim.api.nvim_create_user_command('TarkMode', function(opts) vim.cmd('AcpMode ' .. opts.args) end, { nargs = 1, complete = function() return { 'ask', 'plan', 'build' } end, desc = 'Deprecated alias for AcpMode' })
-vim.api.nvim_create_user_command('TarkApproval', function(opts)
-    require('tark').approve(opts.args)
-end, {
-    nargs = 1,
-    complete = function()
-        return { 'approve_once', 'approve_session', 'approve_always', 'deny_once', 'deny_always' }
-    end,
-    desc = 'Deprecated legacy approval command',
-})
-vim.api.nvim_create_user_command('TarkQuestionnaireSubmit', function() require('tark').questionnaire_submit() end, { desc = 'Deprecated legacy questionnaire submit' })
-vim.api.nvim_create_user_command('TarkQuestionnaireCancel', function() require('tark').questionnaire_cancel() end, { desc = 'Deprecated legacy questionnaire cancel' })
-vim.api.nvim_create_user_command('TarkUiFocus', function(opts) vim.cmd('AcpUiFocus ' .. opts.args) end, { nargs = 1, complete = function() return { 'transcript', 'input', 'interaction' } end, desc = 'Deprecated alias for AcpUiFocus' })
-vim.api.nvim_create_user_command('TarkUiNextAction', function() vim.cmd('AcpUiNextAction') end, { desc = 'Deprecated alias for AcpUiNextAction' })
-vim.api.nvim_create_user_command('TarkUiPrevAction', function() vim.cmd('AcpUiPrevAction') end, { desc = 'Deprecated alias for AcpUiPrevAction' })
-vim.api.nvim_create_user_command('TarkUiSubmit', function() vim.cmd('AcpUiSubmit') end, { desc = 'Deprecated alias for AcpUiSubmit' })
-vim.api.nvim_create_user_command('TarkUiCancel', function() vim.cmd('AcpUiCancel') end, { desc = 'Deprecated alias for AcpUiCancel' })
-
 vim.api.nvim_create_user_command('TarkDownload', function()
     require('tark.binary').download()
 end, { desc = 'Download tark binary' })

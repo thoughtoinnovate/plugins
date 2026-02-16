@@ -12,14 +12,6 @@ M.config = {
     },
 }
 
-local DECISIONS = {
-    'approve_once',
-    'approve_session',
-    'approve_always',
-    'deny_once',
-    'deny_always',
-}
-
 local SPINNER_FRAMES = { '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏' }
 local spinner_frame = 1
 local spinner_active = false
@@ -46,10 +38,6 @@ local function sanitize_lines(value)
     return vim.split(s, '\n', { plain = true, trimempty = false })
 end
 
-local function now_secs()
-    return math.floor(vim.loop.now() / 1000)
-end
-
 local function status_line()
     local busy = state.busy and 'busy' or 'idle'
     local mode = state.mode or 'ask'
@@ -66,13 +54,7 @@ local function status_line()
 
     if state.pending_permission then
         table.insert(parts, 'permission=pending')
-    elseif state.pending_approval then
-        table.insert(parts, 'approval=pending')
     end
-    if state.pending_questionnaire then
-        table.insert(parts, 'questionnaire=pending')
-    end
-
     return table.concat(parts, '  ')
 end
 
@@ -173,7 +155,7 @@ local function apply_focus(target)
 end
 
 local function pending_interaction_exists()
-    return state.pending_permission ~= nil or state.pending_approval ~= nil or state.pending_questionnaire ~= nil
+    return state.pending_permission ~= nil
 end
 
 local function request_key(request_id)
@@ -197,19 +179,6 @@ local function add_action(label, handler, metadata)
         kind = metadata and metadata.kind or nil,
         data = metadata and metadata.data or nil,
     })
-end
-
-local function get_selected_pattern(approval)
-    if not approval then
-        return nil
-    end
-    local idx = approval.selected_pattern_index
-    if not idx or idx < 1 then
-        return nil
-    end
-    local options = approval.pattern_options or {}
-    local item = options[idx]
-    return item and item.pattern or nil
 end
 
 render_transcript = function()
@@ -300,150 +269,6 @@ render_transcript = function()
         push_line('  [submit] send selected option')
         push_line('  [cancel] cancel permission request')
         push_line('')
-    elseif state.pending_approval then
-        local approval = state.pending_approval
-        push_line('Approval Request')
-        push_line(string.format('  tool=%s risk=%s', sanitize_text(approval.tool), sanitize_text(approval.risk)))
-        if approval.command and approval.command ~= '' then
-            push_multiline('  command: ', approval.command)
-        end
-        if approval.timeout_seconds and approval.timeout_seconds > 0 then
-            local remaining = math.max(0, (approval.expires_at or now_secs()) - now_secs())
-            push_line(string.format('  timeout=%ss (remaining %ss)', approval.timeout_seconds, remaining))
-        end
-        push_line('  decision:')
-
-        for _, decision in ipairs(DECISIONS) do
-            local selected = approval.selected_decision == decision
-            local marker = selected and '>' or ' '
-            add_action('approval-decision:' .. decision, function()
-                approval.selected_decision = decision
-            end, { kind = 'approval_decision', data = { decision = decision } })
-            push_line(string.format('  %s [%s] %s', marker, selected and 'x' or ' ', decision))
-        end
-
-        local needs_pattern = approval.selected_decision == 'approve_session'
-            or approval.selected_decision == 'approve_always'
-            or approval.selected_decision == 'deny_always'
-        local options = approval.pattern_options or {}
-        if #options > 0 then
-            push_line('  pattern options:')
-            for idx, option in ipairs(options) do
-                local is_selected = approval.selected_pattern_index == idx
-                local marker = is_selected and '>' or ' '
-                add_action('approval-pattern:' .. idx, function()
-                    approval.selected_pattern_index = idx
-                end, { kind = 'approval_pattern', data = { index = idx } })
-                push_line(string.format('  %s [%s] %s', marker, is_selected and 'x' or ' ', sanitize_text(option.pattern or option.description or ('pattern-' .. idx))))
-            end
-        elseif needs_pattern then
-            push_line('  pattern required for this decision (server provided no options)')
-        end
-
-        add_action('approval-submit', function()
-            local tark = require('tark')
-            tark.approve(approval.selected_decision or 'approve_once')
-        end, { kind = 'approval_submit' })
-        add_action('approval-cancel', function()
-            local tark = require('tark')
-            tark.approve('deny_once')
-        end, { kind = 'approval_cancel' })
-        push_line('  [submit] approve/deny selected decision')
-        push_line('  [cancel] deny once')
-        push_line('')
-    end
-
-    if state.pending_questionnaire then
-        local pq = state.pending_questionnaire
-        local q = pq.questionnaire or {}
-        push_line('Questionnaire')
-        push_line('  ' .. sanitize_text(q.title or 'Untitled'))
-        if q.description then
-            push_multiline('  ', q.description)
-        end
-
-        local questions = q.questions or {}
-        for q_idx, question in ipairs(questions) do
-            push_line(string.format('  Q%d %s', q_idx, sanitize_text(question.text or question.id or 'question')))
-            local qtype = question.type
-
-            if qtype == 'single_select' then
-                local selected = pq.answers[question.id]
-                local options = question.options or {}
-                for _, option in ipairs(options) do
-                    local selected_value = selected and selected.value or selected
-                    local is_selected = selected_value == option.value
-                    add_action('q-single:' .. question.id .. ':' .. tostring(option.value), function()
-                        pq.answers[question.id] = option.value
-                    end, { kind = 'question_single', data = { id = question.id, value = option.value } })
-                    push_line(string.format('    [%s] %s', is_selected and 'x' or ' ', sanitize_text(option.label or option.value)))
-                end
-            elseif qtype == 'multi_select' then
-                pq.answers[question.id] = pq.answers[question.id] or {}
-                local options = question.options or {}
-                local selected_map = {}
-                for _, value in ipairs(pq.answers[question.id]) do
-                    selected_map[value] = true
-                end
-                for _, option in ipairs(options) do
-                    local is_selected = selected_map[option.value] == true
-                    add_action('q-multi:' .. question.id .. ':' .. tostring(option.value), function()
-                        local current = pq.answers[question.id] or {}
-                        local map = {}
-                        for _, value in ipairs(current) do
-                            map[value] = true
-                        end
-                        if map[option.value] then
-                            map[option.value] = nil
-                        else
-                            map[option.value] = true
-                        end
-                        local next_values = {}
-                        for value, enabled in pairs(map) do
-                            if enabled then
-                                table.insert(next_values, value)
-                            end
-                        end
-                        table.sort(next_values)
-                        pq.answers[question.id] = next_values
-                    end, { kind = 'question_multi', data = { id = question.id, value = option.value } })
-                    push_line(string.format('    [%s] %s', is_selected and 'x' or ' ', sanitize_text(option.label or option.value)))
-                end
-            elseif qtype == 'free_text' then
-                local value = pq.answers[question.id]
-                if type(value) ~= 'string' then
-                    value = question.default or ''
-                    pq.answers[question.id] = value
-                end
-                local marker = (pq.edit_mode_question_id == question.id) and '*' or ' '
-                add_action('q-text:' .. question.id, function()
-                    pq.edit_mode_question_id = question.id
-                    pq.focused_question_index = q_idx
-                    set_input_text(value)
-                    apply_focus('input')
-                end, { kind = 'question_text', data = { id = question.id } })
-                push_multiline(string.format('    %s text: ', marker), value)
-            else
-                push_line('    unsupported question type: ' .. sanitize_text(qtype))
-            end
-
-            local err = pq.validation_errors and pq.validation_errors[question.id]
-            if err then
-                push_line('    ! ' .. sanitize_text(err))
-            end
-        end
-
-        add_action('questionnaire-submit', function()
-            local tark = require('tark')
-            tark.questionnaire_submit()
-        end, { kind = 'questionnaire_submit' })
-        add_action('questionnaire-cancel', function()
-            local tark = require('tark')
-            tark.questionnaire_cancel()
-        end, { kind = 'questionnaire_cancel' })
-        push_line('  [submit] send questionnaire answers')
-        push_line('  [cancel] cancel questionnaire')
-        push_line('')
     end
 
     if state.last_error then
@@ -475,56 +300,15 @@ render_transcript = function()
     end
 end
 
-local function validate_questionnaire_answers(pq)
-    local errors = {}
-    local q = pq.questionnaire or {}
-
-    for _, question in ipairs(q.questions or {}) do
-        local value = pq.answers[question.id]
-        if question.type == 'single_select' then
-            if value == nil or value == '' then
-                errors[question.id] = 'single choice required'
-            end
-        elseif question.type == 'multi_select' then
-            local arr = value
-            if type(arr) ~= 'table' then
-                arr = {}
-            end
-            local rules = question.validation or {}
-            local min = rules.min_selections
-            local max = rules.max_selections
-            if min and #arr < min then
-                errors[question.id] = string.format('pick at least %d option(s)', min)
-            end
-            if max and #arr > max then
-                errors[question.id] = string.format('pick at most %d option(s)', max)
-            end
-        elseif question.type == 'free_text' then
-            local text = tostring(value or '')
-            local rules = question.validation or {}
-            if rules.required and vim.trim(text) == '' then
-                errors[question.id] = 'text is required'
-            elseif rules.min_length and #text < rules.min_length then
-                errors[question.id] = string.format('min length is %d', rules.min_length)
-            elseif rules.max_length and #text > rules.max_length then
-                errors[question.id] = string.format('max length is %d', rules.max_length)
-            end
-        end
-    end
-
-    pq.validation_errors = errors
-    return next(errors) == nil
-end
-
 local function setup_transcript_keymaps()
     if not state.transcript_buf or not vim.api.nvim_buf_is_valid(state.transcript_buf) then
         return
     end
 
     local opts = { buffer = state.transcript_buf, silent = true, noremap = true }
-    vim.keymap.set('n', 'j', '<cmd>TarkUiNextAction<cr>', opts)
-    vim.keymap.set('n', 'k', '<cmd>TarkUiPrevAction<cr>', opts)
-    vim.keymap.set('n', '<CR>', '<cmd>TarkUiSubmit<cr>', opts)
+    vim.keymap.set('n', 'j', '<cmd>AcpUiNextAction<cr>', opts)
+    vim.keymap.set('n', 'k', '<cmd>AcpUiPrevAction<cr>', opts)
+    vim.keymap.set('n', '<CR>', '<cmd>AcpUiSubmit<cr>', opts)
     vim.keymap.set('n', '<Space>', function()
         require('tark.widgets.chat').toggle_selected_option()
     end, opts)
@@ -534,8 +318,8 @@ local function setup_transcript_keymaps()
     vim.keymap.set('n', '<Esc>', function()
         require('tark.widgets.chat').leave_edit_mode()
     end, opts)
-    vim.keymap.set('n', '<C-c>', '<cmd>TarkUiCancel<cr>', opts)
-    vim.keymap.set('n', 'q', '<cmd>TarkChatClose<cr>', opts)
+    vim.keymap.set('n', '<C-c>', '<cmd>AcpUiCancel<cr>', opts)
+    vim.keymap.set('n', 'q', '<cmd>AcpChatClose<cr>', opts)
 end
 
 local function setup_input_keymaps()
@@ -544,11 +328,11 @@ local function setup_input_keymaps()
     end
 
     local opts = { buffer = state.input_buf, silent = true, noremap = true }
-    vim.keymap.set('n', '<CR>', '<cmd>TarkUiSubmit<cr>', opts)
-    vim.keymap.set('i', '<CR>', '<Esc><cmd>TarkUiSubmit<cr>', opts)
-    vim.keymap.set('n', '<C-c>', '<cmd>TarkUiCancel<cr>', opts)
-    vim.keymap.set('i', '<C-c>', '<Esc><cmd>TarkUiCancel<cr>', opts)
-    vim.keymap.set('n', 'q', '<cmd>TarkChatClose<cr>', opts)
+    vim.keymap.set('n', '<CR>', '<cmd>AcpUiSubmit<cr>', opts)
+    vim.keymap.set('i', '<CR>', '<Esc><cmd>AcpUiSubmit<cr>', opts)
+    vim.keymap.set('n', '<C-c>', '<cmd>AcpUiCancel<cr>', opts)
+    vim.keymap.set('i', '<C-c>', '<Esc><cmd>AcpUiCancel<cr>', opts)
+    vim.keymap.set('n', 'q', '<cmd>AcpChatClose<cr>', opts)
 end
 
 local function ensure_windows()
@@ -670,12 +454,7 @@ function M.edit_selected_text()
 end
 
 function M.leave_edit_mode()
-    if state.pending_questionnaire and state.pending_questionnaire.edit_mode_question_id then
-        state.pending_questionnaire.edit_mode_question_id = nil
-        clear_input()
-        apply_focus('interaction')
-        render_transcript()
-    end
+    return
 end
 
 function M.consume_input_or(text)
@@ -695,94 +474,67 @@ function M.append_user(text)
     render_transcript()
 end
 
-function M.on_delta(params)
-    local key = request_key(params.request_id) or request_key(state.active_request_id)
-    if key and state.finalized_requests[key] then
-        return
+local function ensure_response_message(response_id)
+    local key = request_key(response_id)
+    if not key then
+        return nil
     end
-
-    local idx = nil
-    if key then
-        idx = state.response_index_by_request[key]
+    local idx = state.response_index_by_request[key]
+    if idx then
+        return idx
     end
-    if not idx then
-        idx = state.current_stream
-    end
-    if not idx then
-        table.insert(state.messages, { role = 'assistant', text = '' })
-        idx = #state.messages
-    end
-
-    state.current_stream = idx
-    state.current_stream_request_id = key
-    if key then
-        state.response_index_by_request[key] = idx
-    end
-
-    local msg = state.messages[idx]
-    msg.text = msg.text .. (params.delta or '')
-    render_transcript()
-end
-
-function M.on_final(params)
-    local key = request_key(params.request_id) or request_key(state.current_stream_request_id) or request_key(state.active_request_id)
-    if key and state.finalized_requests[key] then
-        state.active_request_id = nil
-        state.current_stream = nil
-        state.current_stream_request_id = nil
-        state.busy = false
-        stop_spinner()
-        render_transcript()
-        return
-    end
-
-    local idx = nil
-    if key then
-        idx = state.response_index_by_request[key]
-    end
-    if not idx then
-        idx = state.current_stream
-    end
-
-    if not idx then
-        local text = params.text or ''
-        local last = state.messages[#state.messages]
-        local is_duplicate = last and last.role == 'assistant' and last.text == text
-        if not is_duplicate then
-            table.insert(state.messages, { role = 'assistant', text = text, request_id = key })
-            idx = #state.messages
-        end
-    else
-        local msg = state.messages[idx]
-        if params.text and params.text ~= '' then
-            msg.text = params.text
-        end
-    end
-
-    if key and idx then
-        state.response_index_by_request[key] = idx
-        state.finalized_requests[key] = true
-    end
-
-    state.active_request_id = nil
-    state.current_stream = nil
-    state.current_stream_request_id = nil
-    state.busy = false
-    stop_spinner()
-    render_transcript()
+    table.insert(state.messages, { role = 'assistant', text = '', response_id = key })
+    idx = #state.messages
+    state.response_index_by_request[key] = idx
+    return idx
 end
 
 function M.on_update(params)
     local update = params.update or {}
     local update_type = update.sessionUpdate
+    local response_id = request_key(update.responseId)
 
-    if update_type == 'agent_message_chunk' then
+    if update_type == 'agent_message_start' then
+        if response_id and not state.finalized_requests[response_id] then
+            ensure_response_message(response_id)
+            state.current_stream_request_id = response_id
+            state.busy = true
+            ensure_spinner()
+            render_transcript()
+        end
+        return
+    end
+
+    if update_type == 'agent_message_chunk' and response_id then
+        if state.finalized_requests[response_id] then
+            return
+        end
+        local idx = ensure_response_message(response_id)
         local content = update.content or {}
         local text = content.text or ''
-        M.on_delta({
-            request_id = params.request_id,
-            delta = text,
-        })
+        local msg = state.messages[idx]
+        msg.text = (msg.text or '') .. text
+        state.current_stream = idx
+        state.current_stream_request_id = response_id
+        state.busy = true
+        ensure_spinner()
+        render_transcript()
+        return
+    end
+
+    if update_type == 'agent_message_end' and response_id then
+        if state.finalized_requests[response_id] then
+            return
+        end
+        state.finalized_requests[response_id] = true
+        state.active_request_id = nil
+        if state.current_stream_request_id == response_id then
+            state.current_stream_request_id = nil
+            state.current_stream = nil
+        end
+        state.busy = false
+        stop_spinner()
+        render_transcript()
         return
     end
 
@@ -882,103 +634,12 @@ function M.on_queue(size)
     render_transcript()
 end
 
-function M.on_approval_request(params)
-    state.pending_approval = {
-        interaction_id = params.interaction_id,
-        request_id = params.request_id,
-        tool = params.tool,
-        command = params.command,
-        risk = params.risk,
-        pattern_options = params.pattern_options or {},
-        timeout_seconds = params.timeout_seconds,
-        selected_decision = 'approve_once',
-        selected_pattern_index = nil,
-        expires_at = now_secs() + tonumber(params.timeout_seconds or 0),
-    }
-    table.insert(state.messages, {
-        role = 'system',
-        text = string.format('Approval requested for tool %s', tostring(params.tool or 'unknown')),
-    })
-    state.ui_focus = 'interaction'
-    render_transcript()
-end
-
-function M.on_questionnaire_request(params)
-    state.pending_questionnaire = {
-        interaction_id = params.interaction_id,
-        request_id = params.request_id,
-        questionnaire = params.questionnaire or {},
-        answers = {},
-        focused_question_index = 1,
-        edit_mode_question_id = nil,
-        validation_errors = {},
-        timeout_seconds = params.timeout_seconds,
-        expires_at = now_secs() + tonumber(params.timeout_seconds or 0),
-    }
-    table.insert(state.messages, {
-        role = 'system',
-        text = string.format('Questionnaire requested: %s', tostring((params.questionnaire or {}).title or '')),
-    })
-    state.ui_focus = 'interaction'
-    render_transcript()
-end
-
-function M.clear_pending_approval()
-    state.pending_approval = nil
-    render_transcript()
-end
-
 function M.clear_pending_permission()
     state.pending_permission = nil
     render_transcript()
 end
 
-function M.clear_pending_questionnaire()
-    state.pending_questionnaire = nil
-    render_transcript()
-end
-
-function M.pending_approval()
-    if not state.pending_approval then
-        return nil
-    end
-
-    return {
-        interaction_id = state.pending_approval.interaction_id,
-        request_id = state.pending_approval.request_id,
-        selected_pattern = get_selected_pattern(state.pending_approval),
-    }
-end
-
-function M.pending_approval_decision()
-    if not state.pending_approval then
-        return nil
-    end
-    return state.pending_approval.selected_decision or 'approve_once'
-end
-
-function M.pending_questionnaire()
-    return state.pending_questionnaire
-end
-
-function M.questionnaire_answers()
-    if not state.pending_questionnaire then
-        return {}
-    end
-    return state.pending_questionnaire.answers or {}
-end
-
 function M.submit_contextual()
-    if state.pending_questionnaire and state.pending_questionnaire.edit_mode_question_id then
-        local qid = state.pending_questionnaire.edit_mode_question_id
-        state.pending_questionnaire.answers[qid] = get_input_text()
-        state.pending_questionnaire.edit_mode_question_id = nil
-        clear_input()
-        apply_focus('interaction')
-        render_transcript()
-        return 'questionnaire_text_saved'
-    end
-
     local action = state.ui_actions[state.ui_action_cursor]
     if action then
         action.handler()
@@ -990,34 +651,11 @@ function M.submit_contextual()
 end
 
 function M.cancel_contextual()
-    if state.pending_questionnaire and state.pending_questionnaire.edit_mode_question_id then
-        state.pending_questionnaire.edit_mode_question_id = nil
-        clear_input()
-        apply_focus('interaction')
-        render_transcript()
-        return 'questionnaire_text_cancelled'
-    end
-
-    if state.pending_approval then
-        return 'cancel_approval'
-    end
-
     if state.pending_permission then
         return 'cancel_permission'
     end
 
-    if state.pending_questionnaire then
-        return 'cancel_questionnaire'
-    end
-
     return 'cancel_request'
-end
-
-function M.can_submit_questionnaire()
-    if not state.pending_questionnaire then
-        return false
-    end
-    return validate_questionnaire_answers(state.pending_questionnaire)
 end
 
 return M

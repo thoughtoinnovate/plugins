@@ -75,3 +75,42 @@ jobs:
       - name: Validate README compatibility note
         run: |
           rg -n "ACP v2|Content-Length" README.md
+
+  nvim-profile-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [codex, gemini, jetbrains]
+    defaults:
+      run:
+        working-directory: tark/editors/neovim
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Neovim
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: stable
+      - name: Install plenary.nvim
+        run: |
+          mkdir -p "$HOME/.local/share/nvim"
+          PLENARY_DIR="$HOME/.local/share/nvim/plenary.nvim"
+          if [ ! -d "$PLENARY_DIR" ]; then
+            git clone --depth=1 https://github.com/nvim-lua/plenary.nvim "$PLENARY_DIR"
+          fi
+      - name: Run ACP profile tests (${{ matrix.profile }})
+        env:
+          ACP_TEST_PROFILE: ${{ matrix.profile }}
+        run: |
+          set -o pipefail
+          nvim --headless -u tests/minimal_init.lua \
+            -c "PlenaryBustedDirectory tests/specs/ {minimal_init = 'tests/minimal_init.lua'}" \
+            2>&1 | tee acp-profile-${{ matrix.profile }}.log
+      - name: Upload ACP profile transcript
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvim-acp-profile-${{ matrix.profile }}
+          path: tark/editors/neovim/acp-profile-${{ matrix.profile }}.log
+          if-no-files-found: ignore

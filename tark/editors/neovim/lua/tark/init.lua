@@ -172,8 +172,6 @@ function M.chat_send(message)
         if ok then
             if result_or_err and result_or_err.queued then
                 get_chat().on_error({ code = 'queued', message = 'Request queued until current response completes' })
-            else
-                get_chat().on_final({ text = '', request_id = tostring(vim.loop.hrtime()) })
             end
         else
             get_chat().on_error({ message = result_or_err })
@@ -241,31 +239,6 @@ function M.set_config_option(config_id, value)
     end)
 end
 
--- Backward-compatible wrapper
-function M.approve(decision)
-    local params = get_chat().pending_approval()
-    if not params then
-        vim.notify('acp: no pending approval', vim.log.levels.WARN)
-        return
-    end
-    get_chat().on_error({ message = 'Legacy approval commands are deprecated; use permission selection UI.' })
-end
-
-function M.questionnaire_submit()
-    local params = get_chat().pending_questionnaire()
-    if not params then
-        vim.notify('acp: no pending questionnaire', vim.log.levels.WARN)
-        return
-    end
-
-    if not get_chat().can_submit_questionnaire() then
-        vim.notify('acp: questionnaire validation failed', vim.log.levels.WARN)
-        return
-    end
-
-    get_chat().clear_pending_questionnaire()
-end
-
 function M.ui_focus(target)
     get_chat().focus(target)
 end
@@ -293,20 +266,9 @@ function M.ui_cancel()
             pending.respond(nil)
         end
         get_chat().clear_pending_permission()
-    elseif action == 'cancel_questionnaire' then
-        M.questionnaire_cancel()
     elseif action == 'cancel_request' then
         M.chat_cancel()
     end
-end
-
-function M.questionnaire_cancel()
-    local params = get_chat().pending_questionnaire()
-    if not params then
-        vim.notify('acp: no pending questionnaire', vim.log.levels.WARN)
-        return
-    end
-    get_chat().clear_pending_questionnaire()
 end
 
 -- LSP API

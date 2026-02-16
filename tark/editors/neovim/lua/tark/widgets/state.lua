@@ -19,9 +19,7 @@ local M = {
     queue_size = 0,
     active_request_id = nil,
 
-    pending_approval = nil,
     pending_permission = nil,
-    pending_questionnaire = nil,
 
     ui_focus = 'input',
     ui_action_cursor = 1,

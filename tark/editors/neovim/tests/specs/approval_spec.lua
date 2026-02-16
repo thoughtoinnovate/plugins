@@ -1,34 +1,31 @@
 local chat = require('tark.widgets.chat')
+local state = require('tark.widgets.state')
 
-describe('approval widget model', function()
-    it('defaults approval decision to approve_once', function()
-        chat.on_approval_request({
-            interaction_id = 'itx-approval-1',
-            request_id = 'req-approval-1',
-            tool = 'shell',
-            pattern_options = {
-                { pattern = 'rm -rf tmp/*' },
-                { pattern = 'git clean -fd' },
-            },
-            timeout_seconds = 30,
-        })
-
-        assert.equals('approve_once', chat.pending_approval_decision())
+describe('permission widget model', function()
+    before_each(function()
+        state.pending_permission = nil
     end)
 
-    it('exposes selected pattern through pending_approval payload', function()
-        chat.on_approval_request({
-            interaction_id = 'itx-approval-2',
-            request_id = 'req-approval-2',
-            tool = 'shell',
-            pattern_options = {
-                { pattern = 'echo *' },
+    it('defaults selection to first option', function()
+        chat.on_permission_request({
+            options = {
+                { optionId = 'allow_once', name = 'Allow once' },
+                { optionId = 'reject_once', name = 'Reject once' },
             },
-            timeout_seconds = 30,
-        })
+        }, function() end)
 
-        local pending = chat.pending_approval()
-        pending.selected_pattern = 'echo *'
-        assert.equals('echo *', pending.selected_pattern)
+        assert.equals(1, state.pending_permission.selected_index)
+    end)
+
+    it('cancel clears pending permission', function()
+        chat.on_permission_request({
+            options = {
+                { optionId = 'allow_once', name = 'Allow once' },
+            },
+        }, function() end)
+
+        assert.is_not_nil(state.pending_permission)
+        chat.clear_pending_permission()
+        assert.is_nil(state.pending_permission)
     end)
 end)

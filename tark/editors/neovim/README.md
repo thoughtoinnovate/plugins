@@ -59,15 +59,13 @@ Git-based plugin managers clone repositories, not single folders. If you want on
 ### Interactive keymaps (buffer-local in Tark widget)
 
 - Input pane:
-  - `Enter`: send message (or save questionnaire free-text edit)
+  - `Enter`: send message
   - `Ctrl-C`: cancel current request/interaction
   - `q`: close chat widget
 - Transcript/interaction pane:
   - `j/k`: move interactive selection
   - `Enter`: activate selected action
-  - `Space`: toggle option (single/multi-select or approval selection)
-  - `i`: enter free-text edit mode for questionnaire text fields
-  - `Esc`: leave free-text edit mode
+  - `Space`: toggle permission option
   - `Ctrl-C`: cancel active interaction/request
 
 ## ACP configuration
@@ -100,7 +98,7 @@ require("tark").setup({
 ## Breaking migration
 
 - Primary command namespace is now `:Acp*`.
-- Legacy `:Tark*` chat commands are still provided as compatibility aliases.
+- ACP-related `:Tark*` chat aliases were removed.
 - Removed terminal embedding commands: `:Tark`, `:TarkToggle`, `:TarkOpen`, `:TarkClose`.
 
 ## Tests
