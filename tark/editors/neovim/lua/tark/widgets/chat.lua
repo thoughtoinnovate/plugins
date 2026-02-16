@@ -162,6 +162,13 @@ local function pending_interaction_exists()
     return state.pending_approval ~= nil or state.pending_questionnaire ~= nil
 end
 
+local function request_key(request_id)
+    if not request_id or request_id == '' then
+        return nil
+    end
+    return tostring(request_id)
+end
+
 local function ensure_ui_actions()
     if not state.ui_actions then
         state.ui_actions = {}
@@ -599,36 +606,82 @@ end
 function M.append_user(text)
     table.insert(state.messages, { role = 'user', text = text })
     state.current_stream = nil
+    state.current_stream_request_id = nil
     render_transcript()
 end
 
 function M.on_delta(params)
-    if not state.current_stream then
-        table.insert(state.messages, { role = 'assistant', text = '' })
-        state.current_stream = #state.messages
+    local key = request_key(params.request_id) or request_key(state.active_request_id)
+    if key and state.finalized_requests[key] then
+        return
     end
 
-    local msg = state.messages[state.current_stream]
+    local idx = nil
+    if key then
+        idx = state.response_index_by_request[key]
+    end
+    if not idx then
+        idx = state.current_stream
+    end
+    if not idx then
+        table.insert(state.messages, { role = 'assistant', text = '' })
+        idx = #state.messages
+    end
+
+    state.current_stream = idx
+    state.current_stream_request_id = key
+    if key then
+        state.response_index_by_request[key] = idx
+    end
+
+    local msg = state.messages[idx]
     msg.text = msg.text .. (params.delta or '')
     render_transcript()
 end
 
 function M.on_final(params)
-    if not state.current_stream then
+    local key = request_key(params.request_id) or request_key(state.current_stream_request_id) or request_key(state.active_request_id)
+    if key and state.finalized_requests[key] then
+        state.active_request_id = nil
+        state.current_stream = nil
+        state.current_stream_request_id = nil
+        state.busy = false
+        stop_spinner()
+        render_transcript()
+        return
+    end
+
+    local idx = nil
+    if key then
+        idx = state.response_index_by_request[key]
+    end
+    if not idx then
+        idx = state.current_stream
+    end
+
+    if not idx then
         local text = params.text or ''
         local last = state.messages[#state.messages]
         local is_duplicate = last and last.role == 'assistant' and last.text == text
         if not is_duplicate then
-            table.insert(state.messages, { role = 'assistant', text = text })
+            table.insert(state.messages, { role = 'assistant', text = text, request_id = key })
+            idx = #state.messages
         end
     else
+        local msg = state.messages[idx]
         if params.text and params.text ~= '' then
-            state.messages[state.current_stream].text = params.text
+            msg.text = params.text
         end
+    end
+
+    if key and idx then
+        state.response_index_by_request[key] = idx
+        state.finalized_requests[key] = true
     end
 
     state.active_request_id = nil
     state.current_stream = nil
+    state.current_stream_request_id = nil
     state.busy = false
     stop_spinner()
     render_transcript()
@@ -668,6 +721,7 @@ end
 
 function M.on_send_accepted(request_id)
     state.active_request_id = request_id
+    state.current_stream_request_id = request_key(request_id)
     state.busy = true
     ensure_spinner()
     render_transcript()

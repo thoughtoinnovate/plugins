@@ -71,6 +71,19 @@ describe('chat widget - ACP integration', function()
         assert.equals(1, #state.messages)
     end)
 
+    it('ignores duplicate final events for same request_id', function()
+        state.messages = {}
+        state.current_stream = nil
+        state.response_index_by_request = {}
+        state.finalized_requests = {}
+
+        chat.on_final({ request_id = 'req-dup-1', text = 'hello once' })
+        chat.on_final({ request_id = 'req-dup-1', text = 'hello once' })
+
+        assert.equals(1, #state.messages)
+        assert.equals('hello once', state.messages[1].text)
+    end)
+
     it('tracks pending approval and questionnaire state', function()
         chat.on_approval_request({ interaction_id = 'itx-1', request_id = 'req-1', tool = 'shell' })
         assert.is_not_nil(chat.pending_approval())

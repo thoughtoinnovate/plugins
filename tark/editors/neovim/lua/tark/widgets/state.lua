@@ -6,6 +6,9 @@ local M = {
 
     messages = {},
     current_stream = nil,
+    current_stream_request_id = nil,
+    response_index_by_request = {},
+    finalized_requests = {},
 
     busy = false,
     mode = 'ask',
