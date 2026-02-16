@@ -3,6 +3,7 @@ local state = require('tark.widgets.state')
 local M = {}
 
 M.config = {
+    auto_scroll = true,
     window = {
         position = 'right',
         width = 0.4,
@@ -38,6 +39,13 @@ local function sanitize_text(value)
     return s
 end
 
+local function sanitize_lines(value)
+    local s = tostring(value or '')
+    s = s:gsub('%z', '')
+    s = s:gsub('\r', '')
+    return vim.split(s, '\n', { plain = true, trimempty = false })
+end
+
 local function now_secs()
     return math.floor(vim.loop.now() / 1000)
 end
@@ -49,7 +57,6 @@ local function status_line()
     local model = state.model or '-'
     local parts = {
         string.format('[%s]', busy),
-        string.format('progress=%s', state.busy and SPINNER_FRAMES[spinner_frame] or '-'),
         string.format('mode=%s', mode),
         string.format('provider=%s', provider),
         string.format('model=%s', model),
@@ -65,6 +72,11 @@ local function status_line()
     end
 
     return table.concat(parts, '  ')
+end
+
+local function progress_line()
+    local progress = state.busy and SPINNER_FRAMES[spinner_frame] or '-'
+    return string.format('Progress: %s', progress)
 end
 
 local function tick_spinner()
@@ -212,8 +224,7 @@ render_transcript = function()
     end
 
     local function push_multiline(prefix, body)
-        local raw = sanitize_text(body or '')
-        local parts = vim.split(raw, '\n', { plain = true, trimempty = false })
+        local parts = sanitize_lines(body)
         if #parts == 0 then
             push_line(prefix)
             return
@@ -225,7 +236,15 @@ render_transcript = function()
     end
 
     for _, msg in ipairs(state.messages) do
-        push_multiline(string.format('%s: ', msg.role), msg.text)
+        push_line(string.format('### %s', sanitize_text(msg.role)))
+        local parts = sanitize_lines(msg.text)
+        if #parts == 0 then
+            push_line('')
+        else
+            for _, part in ipairs(parts) do
+                table.insert(lines, part)
+            end
+        end
         push_line('')
     end
 
@@ -391,9 +410,17 @@ render_transcript = function()
         push_line('Selected action: ' .. sanitize_text(action.label))
     end
 
+    push_line('')
+    push_line(progress_line())
+
     vim.bo[state.transcript_buf].modifiable = true
     vim.api.nvim_buf_set_lines(state.transcript_buf, 0, -1, false, lines)
     vim.bo[state.transcript_buf].modifiable = false
+
+    if M.config.auto_scroll and state.transcript_win and vim.api.nvim_win_is_valid(state.transcript_win) then
+        local last_line = vim.api.nvim_buf_line_count(state.transcript_buf)
+        pcall(vim.api.nvim_win_set_cursor, state.transcript_win, { math.max(1, last_line), 0 })
+    end
 end
 
 local function validate_questionnaire_answers(pq)
@@ -485,6 +512,7 @@ local function ensure_windows()
     vim.bo[state.transcript_buf].buftype = 'nofile'
     vim.bo[state.transcript_buf].swapfile = false
     vim.bo[state.transcript_buf].bufhidden = 'hide'
+    vim.bo[state.transcript_buf].filetype = 'markdown'
     vim.bo[state.transcript_buf].modifiable = false
     vim.api.nvim_win_set_buf(state.transcript_win, state.transcript_buf)
     vim.api.nvim_buf_set_name(state.transcript_buf, 'tark://chat/transcript')

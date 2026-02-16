@@ -30,19 +30,34 @@ describe('chat widget - ACP integration', function()
         assert.equals('plan', state.mode)
     end)
 
-    it('renders progress indicator in status line while busy', function()
+    it('renders progress indicator above prompt area while busy', function()
         state.messages = {}
         state.transcript_buf = vim.api.nvim_create_buf(false, true)
         vim.bo[state.transcript_buf].modifiable = false
 
         chat.on_status({ busy = true, mode = 'ask' })
-        local lines = vim.api.nvim_buf_get_lines(state.transcript_buf, 0, 4, false)
-        assert.is_true((lines[3] or ''):match('progress=') ~= nil)
-        assert.is_true((lines[3] or ''):match('progress=%-') == nil)
+        local lines = vim.api.nvim_buf_get_lines(state.transcript_buf, 0, -1, false)
+        local joined = table.concat(lines, '\n')
+        assert.is_true(joined:match('Progress: ') ~= nil)
+        assert.is_true(joined:match('Progress: %-') == nil)
+        local progress_idx = nil
+        local input_keys_idx = nil
+        for i, line in ipairs(lines) do
+            if line:match('^Progress: ') then
+                progress_idx = i
+            end
+            if line:match('^Input keys: ') then
+                input_keys_idx = i
+            end
+        end
+        assert.is_not_nil(progress_idx)
+        assert.is_not_nil(input_keys_idx)
+        assert.is_true(progress_idx > input_keys_idx)
 
         chat.on_status({ busy = false, mode = 'ask' })
-        lines = vim.api.nvim_buf_get_lines(state.transcript_buf, 0, 4, false)
-        assert.is_true((lines[3] or ''):match('progress=%-') ~= nil)
+        lines = vim.api.nvim_buf_get_lines(state.transcript_buf, 0, -1, false)
+        joined = table.concat(lines, '\n')
+        assert.is_true(joined:match('Progress: %-') ~= nil)
 
         state.transcript_buf = nil
     end)
@@ -136,6 +151,54 @@ describe('chat widget - ACP integration', function()
 
         assert.is_true(ok)
 
+        state.transcript_buf = nil
+    end)
+
+    it('renders assistant markdown message as multiline content', function()
+        state.messages = {}
+        state.current_stream = nil
+        state.response_index_by_request = {}
+        state.finalized_requests = {}
+        state.transcript_buf = vim.api.nvim_create_buf(false, true)
+        vim.bo[state.transcript_buf].modifiable = false
+
+        chat.on_final({ request_id = 'req-md-1', text = '## Title\n- item one\n- item two' })
+        local lines = vim.api.nvim_buf_get_lines(state.transcript_buf, 0, -1, false)
+        local joined = table.concat(lines, '\n')
+        assert.is_true(joined:match('### assistant') ~= nil)
+        assert.is_true(joined:match('## Title') ~= nil)
+        assert.is_true(joined:match('%- item one') ~= nil)
+        assert.is_true(joined:match('%- item two') ~= nil)
+
+        state.transcript_buf = nil
+    end)
+
+    it('auto-scrolls transcript window to latest message', function()
+        state.messages = {}
+        state.current_stream = nil
+        state.response_index_by_request = {}
+        state.finalized_requests = {}
+
+        vim.cmd('new')
+        local win = vim.api.nvim_get_current_win()
+        local buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_win_set_buf(win, buf)
+        vim.bo[buf].modifiable = false
+        state.transcript_win = win
+        state.transcript_buf = buf
+
+        local long_text = {}
+        for i = 1, 60 do
+            long_text[#long_text + 1] = string.format('line %d', i)
+        end
+        chat.on_final({ request_id = 'req-scroll-1', text = table.concat(long_text, '\n') })
+
+        local cursor = vim.api.nvim_win_get_cursor(win)
+        local last_line = vim.api.nvim_buf_line_count(buf)
+        assert.equals(last_line, cursor[1])
+
+        vim.api.nvim_win_close(win, true)
+        state.transcript_win = nil
         state.transcript_buf = nil
     end)
 end)
