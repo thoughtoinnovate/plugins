@@ -12,6 +12,9 @@ M.state = {
     read_buffer = '',
     expected_len = nil,
     current_request_id = nil,
+    busy = false,
+    send_queue = {},
+    draining = false,
 }
 
 M.config = {
@@ -30,18 +33,76 @@ local function json_encode(val)
     return vim.fn.json_encode(val)
 end
 
-local function dispatch_notification(msg)
-    local handler = M.state.handlers[msg.method]
+local function sanitize_text(value)
+    local s = tostring(value or '')
+    s = s:gsub('[%z\r]', ' ')
+    return s
+end
+
+local function parse_error(err)
+    if not err then
+        return nil
+    end
+    if type(err) == 'table' then
+        local data = err.data or {}
+        local code = data.code or err.code or 'unknown_error'
+        local message = sanitize_text(err.message or data.message or vim.inspect(err))
+        return {
+            code = code,
+            message = message,
+        }
+    end
+    return {
+        code = 'unknown_error',
+        message = sanitize_text(err),
+    }
+end
+
+local function emit(method, params)
+    local handler = M.state.handlers[method]
     if handler then
         vim.schedule(function()
-            pcall(handler, msg.params or {})
+            pcall(handler, params or {})
         end)
     end
+end
+
+local function emit_queue_update()
+    emit('client/queue', { size = #M.state.send_queue })
 end
 
 local function resolve_binary()
     local binary = require('tark.binary')
     return binary.find(true)
+end
+
+local function is_session_not_found(err)
+    if type(err) ~= 'table' then
+        return false
+    end
+    local data = err.data or {}
+    return data.code == 'session_not_found'
+end
+
+local function is_session_busy(err)
+    if type(err) ~= 'table' then
+        return false
+    end
+    local data = err.data or {}
+    return data.code == 'session_busy'
+end
+
+local function normalize_request_error(reason)
+    if reason == 'timeout' then
+        return { code = 'request_timeout', message = 'ACP request timeout' }
+    end
+    if reason == 'process_exit' then
+        return { code = 'process_exit', message = 'ACP process exited' }
+    end
+    if reason == 'protocol_error' then
+        return { code = 'protocol_error', message = 'ACP protocol decode failure' }
+    end
+    return { code = 'unknown_error', message = tostring(reason or 'ACP request failed') }
 end
 
 local function parse_frames(chunk)
@@ -68,6 +129,7 @@ local function parse_frames(chunk)
             local len = headers:match('[Cc]ontent%-[Ll]ength:%s*(%d+)')
             if not len then
                 M.state.read_buffer = M.state.read_buffer:sub(header_end + delim_len)
+                emit('error/event', normalize_request_error('protocol_error'))
                 return
             end
 
@@ -84,15 +146,36 @@ local function parse_frames(chunk)
         M.state.expected_len = nil
 
         local msg = json_decode(body)
-        if msg then
-            if msg.id ~= nil and M.state.pending[msg.id] then
-                local cb = M.state.pending[msg.id]
-                M.state.pending[msg.id] = nil
-                vim.schedule(function()
-                    cb(msg.error, msg.result)
-                end)
-            elseif msg.method then
-                dispatch_notification(msg)
+        if not msg then
+            emit('error/event', normalize_request_error('protocol_error'))
+        elseif msg.id ~= nil and M.state.pending[msg.id] then
+            local cb = M.state.pending[msg.id]
+            M.state.pending[msg.id] = nil
+            vim.schedule(function()
+                cb(msg.error, msg.result)
+            end)
+        elseif msg.method then
+            if msg.method == 'session/status' then
+                local params = msg.params or {}
+                M.state.busy = params.busy == true
+                emit('session/status', vim.tbl_extend('force', params, { queue_size = #M.state.send_queue }))
+                if not M.state.busy then
+                    vim.defer_fn(function()
+                        if M.try_drain_queue then
+                            M.try_drain_queue()
+                        end
+                    end, 10)
+                end
+            elseif msg.method == 'response/final' then
+                M.state.current_request_id = nil
+                emit('response/final', msg.params or {})
+                vim.defer_fn(function()
+                    if M.try_drain_queue then
+                        M.try_drain_queue()
+                    end
+                end, 10)
+            else
+                emit(msg.method, msg.params or {})
             end
         end
     end
@@ -117,20 +200,28 @@ local function on_stdout(_, data)
     parse_frames(table.concat(chunks, ''))
 end
 
+local function fail_pending_requests(reason)
+    local err = normalize_request_error(reason)
+    for id, cb in pairs(M.state.pending) do
+        pcall(cb, { code = err.code, message = err.message, data = { code = err.code } }, nil)
+        M.state.pending[id] = nil
+    end
+end
+
 local function on_exit()
     M.state.connected = false
     M.state.session_id = nil
     M.state.job_id = nil
     M.state.current_request_id = nil
-    for id, cb in pairs(M.state.pending) do
-        pcall(cb, { message = 'ACP process exited' }, nil)
-        M.state.pending[id] = nil
-    end
+    M.state.busy = false
+    M.state.read_buffer = ''
+    M.state.expected_len = nil
+    fail_pending_requests('process_exit')
 end
 
 local function request(method, params, cb, timeout_ms)
     if not M.state.connected or not M.state.job_id then
-        cb({ message = 'ACP not connected' }, nil)
+        cb({ code = 'not_connected', message = 'ACP not connected', data = { code = 'not_connected' } }, nil)
         return
     end
 
@@ -150,7 +241,7 @@ local function request(method, params, cb, timeout_ms)
     local ok = pcall(vim.fn.chansend, M.state.job_id, frame)
     if not ok then
         M.state.pending[id] = nil
-        cb({ message = 'Failed to write ACP request' }, nil)
+        cb({ code = 'write_failed', message = 'Failed to write ACP request', data = { code = 'write_failed' } }, nil)
         return
     end
 
@@ -160,25 +251,11 @@ local function request(method, params, cb, timeout_ms)
             local pending = M.state.pending[id]
             if pending then
                 M.state.pending[id] = nil
-                pending({ message = 'ACP request timeout' }, nil)
+                local err = normalize_request_error('timeout')
+                pending({ code = err.code, message = err.message, data = { code = err.code } }, nil)
             end
         end, timeout)
     end
-end
-
-local function parse_error(err)
-    if not err then
-        return nil
-    end
-    if type(err) == 'table' then
-        local code = err.code or ((err.data or {}).code)
-        local msg = err.message or vim.inspect(err)
-        if code then
-            return tostring(code) .. ': ' .. tostring(msg)
-        end
-        return msg
-    end
-    return tostring(err)
 end
 
 local function bootstrap(cb)
@@ -190,20 +267,20 @@ local function bootstrap(cb)
         versions = { '2' },
     }, function(err)
         if err then
-            cb(false, 'initialize failed: ' .. parse_error(err))
+            local parsed = parse_error(err)
+            cb(false, string.format('initialize failed: %s', parsed.message))
             return
         end
 
-        local create_params = {
-            cwd = vim.fn.getcwd(),
-        }
+        local create_params = { cwd = vim.fn.getcwd() }
         if M.config.mode and M.config.mode ~= '' then
             create_params.mode = M.config.mode
         end
 
         request('session/create', create_params, function(create_err, create_result)
             if create_err then
-                cb(false, 'session/create failed: ' .. parse_error(create_err))
+                local parsed = parse_error(create_err)
+                cb(false, string.format('session/create failed: %s', parsed.message))
                 return
             end
 
@@ -214,6 +291,74 @@ local function bootstrap(cb)
             end
 
             cb(true, nil)
+        end)
+    end)
+end
+
+local function queue_send(message, context, cb)
+    table.insert(M.state.send_queue, {
+        message = message,
+        context = context,
+        cb = cb,
+        local_id = string.format('q-%d', vim.loop.hrtime()),
+        created_at = vim.loop.now(),
+    })
+    emit_queue_update()
+    cb(true, { queued = true, local_id = M.state.send_queue[#M.state.send_queue].local_id })
+end
+
+local function send_message_once(message, context, cb, allow_retry)
+    request('context/update', {
+        session_id = M.state.session_id,
+        active_file = context and context.active_file or nil,
+        cursor = context and context.cursor or nil,
+        selection = context and context.selection or nil,
+        active_excerpt = context and context.active_excerpt or nil,
+        buffers = context and context.buffers or {},
+    }, function(ctx_err)
+        if ctx_err then
+            if allow_retry and is_session_not_found(ctx_err) then
+                bootstrap(function(ok, boot_err)
+                    if not ok then
+                        cb(false, 'context/update failed: ' .. tostring(boot_err))
+                        return
+                    end
+                    send_message_once(message, context, cb, false)
+                end)
+                return
+            end
+            local parsed = parse_error(ctx_err)
+            cb(false, string.format('context/update failed: %s', parsed.message))
+            return
+        end
+
+        request('session/send_message', {
+            session_id = M.state.session_id,
+            message = message,
+        }, function(msg_err, result)
+            if msg_err then
+                if is_session_busy(msg_err) then
+                    queue_send(message, context, cb)
+                    return
+                end
+                if allow_retry and is_session_not_found(msg_err) then
+                    bootstrap(function(ok, boot_err)
+                        if not ok then
+                            cb(false, 'session/send_message failed: ' .. tostring(boot_err))
+                            return
+                        end
+                        send_message_once(message, context, cb, false)
+                    end)
+                    return
+                end
+                local parsed = parse_error(msg_err)
+                cb(false, string.format('session/send_message failed: %s', parsed.message))
+                return
+            end
+
+            M.state.current_request_id = result and result.request_id or nil
+            M.state.busy = true
+            cb(true, result)
         end)
     end)
 end
@@ -272,32 +417,42 @@ function M.send_message(message, context, cb)
             return
         end
 
-        local session_id = M.state.session_id
-        request('context/update', {
-            session_id = session_id,
-            active_file = context and context.active_file or nil,
-            cursor = context and context.cursor or nil,
-            selection = context and context.selection or nil,
-            active_excerpt = context and context.active_excerpt or nil,
-            buffers = context and context.buffers or {},
-        }, function(ctx_err)
-            if ctx_err then
-                cb(false, 'context/update failed: ' .. parse_error(ctx_err))
-                return
-            end
+        if M.state.busy then
+            queue_send(message, context, cb)
+            return
+        end
 
-            request('session/send_message', {
-                session_id = session_id,
-                message = message,
-            }, function(msg_err, result)
-                if msg_err then
-                    cb(false, 'session/send_message failed: ' .. parse_error(msg_err))
-                    return
-                end
-                M.state.current_request_id = result and result.request_id or nil
-                cb(true, result)
-            end)
-        end)
+        send_message_once(message, context, cb, true)
+    end)
+end
+
+function M.try_drain_queue()
+    if M.state.draining then
+        return
+    end
+    if M.state.busy then
+        return
+    end
+    if #M.state.send_queue == 0 then
+        emit_queue_update()
+        return
+    end
+
+    local item = table.remove(M.state.send_queue, 1)
+    emit_queue_update()
+
+    M.state.draining = true
+    M.send_message(item.message, item.context, function(ok, result_or_err)
+        M.state.draining = false
+        if item.cb then
+            item.cb(ok, result_or_err)
+        end
+        if ok and type(result_or_err) == 'table' and result_or_err.queued then
+            return
+        end
+        vim.defer_fn(function()
+            M.try_drain_queue()
+        end, 10)
     end)
 end
 
@@ -313,7 +468,8 @@ function M.set_mode(mode, cb)
             mode = mode,
         }, function(set_err, result)
             if set_err then
-                cb(false, parse_error(set_err))
+                local parsed = parse_error(set_err)
+                cb(false, parsed.message)
                 return
             end
             M.config.mode = result.mode or mode
@@ -334,13 +490,17 @@ function M.cancel(cb)
         session_id = M.state.session_id,
         request_id = M.state.current_request_id,
     }, function(err, result)
-        if cb then
-            if err then
-                cb(false, parse_error(err))
-            else
-                cb(true, result)
-            end
+        if err then
+            local parsed = parse_error(err)
+            cb(false, parsed.message)
+            return
         end
+        M.state.current_request_id = nil
+        M.state.busy = false
+        cb(true, result)
+        vim.defer_fn(function()
+            M.try_drain_queue()
+        end, 10)
     end)
 end
 
@@ -355,9 +515,11 @@ function M.respond_approval(decision, params, cb)
         request_id = params.request_id,
         interaction_id = params.interaction_id,
         decision = decision,
+        selected_pattern = params.selected_pattern,
     }, function(err, result)
         if err then
-            cb(false, parse_error(err))
+            local parsed = parse_error(err)
+            cb(false, parsed.message)
             return
         end
         cb(true, result)
@@ -378,11 +540,16 @@ function M.respond_questionnaire(params, cancelled, answers, cb)
         answers = answers or {},
     }, function(err, result)
         if err then
-            cb(false, parse_error(err))
+            local parsed = parse_error(err)
+            cb(false, parsed.message)
             return
         end
         cb(true, result)
     end)
+end
+
+function M.queue_size()
+    return #M.state.send_queue
 end
 
 function M.close()

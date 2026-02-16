@@ -119,6 +119,9 @@ function M.setup(opts)
     get_acp().on('error/event', function(params)
         get_chat().on_error(params)
     end)
+    get_acp().on('client/queue', function(params)
+        get_chat().on_queue(params.size or 0)
+    end)
     get_acp().on('approval/request', function(params)
         get_chat().on_approval_request(params)
     end)
@@ -161,7 +164,11 @@ function M.chat_send(message)
 
     get_acp().send_message(prompt, ctx, function(ok, result_or_err)
         if ok then
-            get_chat().on_send_accepted(result_or_err.request_id)
+            if result_or_err and result_or_err.queued then
+                get_chat().on_error({ code = 'queued', message = 'Request queued until current response completes' })
+            else
+                get_chat().on_send_accepted(result_or_err.request_id)
+            end
         else
             get_chat().on_error({ message = result_or_err })
         end
@@ -190,7 +197,11 @@ function M.ask_buffer(question)
 
     get_acp().send_message(prompt, ctx, function(ok, result_or_err)
         if ok then
-            get_chat().on_send_accepted(result_or_err.request_id)
+            if result_or_err and result_or_err.queued then
+                get_chat().on_error({ code = 'queued', message = 'Request queued until current response completes' })
+            else
+                get_chat().on_send_accepted(result_or_err.request_id)
+            end
         else
             get_chat().on_error({ message = result_or_err })
         end
@@ -209,7 +220,11 @@ function M.ask_selection(line1, line2, question)
 
     get_acp().send_message(prompt, ctx, function(ok, result_or_err)
         if ok then
-            get_chat().on_send_accepted(result_or_err.request_id)
+            if result_or_err and result_or_err.queued then
+                get_chat().on_error({ code = 'queued', message = 'Request queued until current response completes' })
+            else
+                get_chat().on_send_accepted(result_or_err.request_id)
+            end
         else
             get_chat().on_error({ message = result_or_err })
         end
@@ -249,13 +264,50 @@ function M.questionnaire_submit()
         return
     end
 
-    get_acp().respond_questionnaire(params, false, {}, function(ok, err)
+    if not get_chat().can_submit_questionnaire() then
+        vim.notify('tark: questionnaire validation failed', vim.log.levels.WARN)
+        return
+    end
+
+    get_acp().respond_questionnaire(params, false, get_chat().questionnaire_answers(), function(ok, err)
         if ok then
             get_chat().clear_pending_questionnaire()
         else
             get_chat().on_error({ message = err })
         end
     end)
+end
+
+function M.ui_focus(target)
+    get_chat().focus(target)
+end
+
+function M.ui_next_action()
+    get_chat().next_action()
+end
+
+function M.ui_prev_action()
+    get_chat().prev_action()
+end
+
+function M.ui_submit()
+    local result = get_chat().submit_contextual()
+    if result == 'send_message' then
+        M.chat_send()
+    elseif result == 'questionnaire_submit' or result == 'action_executed' then
+        -- handled by action callback
+    end
+end
+
+function M.ui_cancel()
+    local action = get_chat().cancel_contextual()
+    if action == 'cancel_approval' then
+        M.approve('deny_once')
+    elseif action == 'cancel_questionnaire' then
+        M.questionnaire_cancel()
+    elseif action == 'cancel_request' then
+        M.chat_cancel()
+    end
 end
 
 function M.questionnaire_cancel()

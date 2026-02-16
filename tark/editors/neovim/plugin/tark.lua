@@ -81,6 +81,32 @@ vim.api.nvim_create_user_command('TarkQuestionnaireCancel', function()
     require('tark').questionnaire_cancel()
 end, { desc = 'Cancel pending questionnaire' })
 
+vim.api.nvim_create_user_command('TarkUiFocus', function(opts)
+    require('tark').ui_focus(opts.args)
+end, {
+    nargs = 1,
+    complete = function()
+        return { 'transcript', 'input', 'interaction' }
+    end,
+    desc = 'Focus tark UI pane (transcript|input|interaction)',
+})
+
+vim.api.nvim_create_user_command('TarkUiNextAction', function()
+    require('tark').ui_next_action()
+end, { desc = 'Move to next interactive tark action' })
+
+vim.api.nvim_create_user_command('TarkUiPrevAction', function()
+    require('tark').ui_prev_action()
+end, { desc = 'Move to previous interactive tark action' })
+
+vim.api.nvim_create_user_command('TarkUiSubmit', function()
+    require('tark').ui_submit()
+end, { desc = 'Submit active tark UI action or send input' })
+
+vim.api.nvim_create_user_command('TarkUiCancel', function()
+    require('tark').ui_cancel()
+end, { desc = 'Cancel active tark UI interaction or request' })
+
 vim.api.nvim_create_user_command('TarkDownload', function()
     require('tark.binary').download()
 end, { desc = 'Download tark binary' })

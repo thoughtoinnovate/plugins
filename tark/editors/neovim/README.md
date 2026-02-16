@@ -51,7 +51,25 @@ Git-based plugin managers clone repositories, not single folders. If you want on
 - `:TarkChatCancel` cancels active ACP request.
 - `:TarkMode ask|plan|build` changes ACP session mode.
 - `:TarkApproval ...` and questionnaire commands handle interactive tool gates.
+- `:TarkUiFocus transcript|input|interaction` moves focus between panes.
+- `:TarkUiNextAction` / `:TarkUiPrevAction` navigates interactive actions.
+- `:TarkUiSubmit` submits active interaction action or sends input text.
+- `:TarkUiCancel` cancels active interaction/request contextually.
 - Completion provider/model remain managed by local `tark` configuration.
+
+### Interactive keymaps (buffer-local in Tark widget)
+
+- Input pane:
+  - `Enter`: send message (or save questionnaire free-text edit)
+  - `Ctrl-C`: cancel current request/interaction
+  - `q`: close chat widget
+- Transcript/interaction pane:
+  - `j/k`: move interactive selection
+  - `Enter`: activate selected action
+  - `Space`: toggle option (single/multi-select or approval selection)
+  - `i`: enter free-text edit mode for questionnaire text fields
+  - `Esc`: leave free-text edit mode
+  - `Ctrl-C`: cancel active interaction/request
 
 ## Breaking migration
 

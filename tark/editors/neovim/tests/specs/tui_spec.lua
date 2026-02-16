@@ -50,6 +50,7 @@ describe('chat widget - ACP integration', function()
     it('tracks pending approval and questionnaire state', function()
         chat.on_approval_request({ interaction_id = 'itx-1', request_id = 'req-1', tool = 'shell' })
         assert.is_not_nil(chat.pending_approval())
+        assert.equals('approve_once', chat.pending_approval_decision())
         chat.clear_pending_approval()
         assert.is_nil(chat.pending_approval())
 
@@ -57,6 +58,34 @@ describe('chat widget - ACP integration', function()
         assert.is_not_nil(chat.pending_questionnaire())
         chat.clear_pending_questionnaire()
         assert.is_nil(chat.pending_questionnaire())
+    end)
+
+    it('applies queue size updates to status model', function()
+        chat.on_queue(2)
+        assert.equals(2, state.queue_size)
+    end)
+
+    it('validates questionnaire answers before submit', function()
+        chat.on_questionnaire_request({
+            interaction_id = 'itx-3',
+            request_id = 'req-3',
+            questionnaire = {
+                title = 'Test',
+                questions = {
+                    {
+                        id = 'q1',
+                        text = 'Pick one',
+                        type = 'single_select',
+                        options = {
+                            { value = 'a', label = 'A' },
+                        },
+                    },
+                },
+            },
+        })
+        assert.is_false(chat.can_submit_questionnaire())
+        state.pending_questionnaire.answers.q1 = 'a'
+        assert.is_true(chat.can_submit_questionnaire())
     end)
 
     it('renders multiline error text without buffer line errors', function()
