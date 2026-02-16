@@ -19,6 +19,11 @@ local DECISIONS = {
     'deny_always',
 }
 
+local SPINNER_FRAMES = { '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏' }
+local spinner_frame = 1
+local spinner_active = false
+local render_transcript
+
 local function compute_width()
     local width = M.config.window.width
     if width <= 1 then
@@ -44,6 +49,7 @@ local function status_line()
     local model = state.model or '-'
     local parts = {
         string.format('[%s]', busy),
+        string.format('progress=%s', state.busy and SPINNER_FRAMES[spinner_frame] or '-'),
         string.format('mode=%s', mode),
         string.format('provider=%s', provider),
         string.format('model=%s', model),
@@ -59,6 +65,37 @@ local function status_line()
     end
 
     return table.concat(parts, '  ')
+end
+
+local function tick_spinner()
+    if not spinner_active then
+        return
+    end
+    if not state.busy then
+        spinner_active = false
+        spinner_frame = 1
+        return
+    end
+    if not state.transcript_buf or not vim.api.nvim_buf_is_valid(state.transcript_buf) then
+        spinner_active = false
+        return
+    end
+    spinner_frame = (spinner_frame % #SPINNER_FRAMES) + 1
+    render_transcript()
+    vim.defer_fn(tick_spinner, 120)
+end
+
+local function ensure_spinner()
+    if spinner_active then
+        return
+    end
+    spinner_active = true
+    vim.defer_fn(tick_spinner, 120)
+end
+
+local function stop_spinner()
+    spinner_active = false
+    spinner_frame = 1
 end
 
 local function action_count()
@@ -154,7 +191,7 @@ local function get_selected_pattern(approval)
     return item and item.pattern or nil
 end
 
-local function render_transcript()
+render_transcript = function()
     if not state.transcript_buf or not vim.api.nvim_buf_is_valid(state.transcript_buf) then
         return
     end
@@ -468,10 +505,14 @@ end
 
 function M.open()
     ensure_windows()
+    if state.busy then
+        ensure_spinner()
+    end
     render_transcript()
 end
 
 function M.close()
+    stop_spinner()
     if state.input_win and vim.api.nvim_win_is_valid(state.input_win) then
         vim.api.nvim_win_close(state.input_win, true)
     end
@@ -589,16 +630,23 @@ function M.on_final(params)
     state.active_request_id = nil
     state.current_stream = nil
     state.busy = false
+    stop_spinner()
     render_transcript()
 end
 
 function M.on_status(params)
+    local was_busy = state.busy
     state.busy = params.busy == true
     state.mode = params.mode or state.mode
     state.provider = params.provider or state.provider
     state.model = params.model or state.model
     if params.queue_size ~= nil then
         state.queue_size = tonumber(params.queue_size) or state.queue_size
+    end
+    if state.busy then
+        ensure_spinner()
+    elseif was_busy then
+        stop_spinner()
     end
     render_transcript()
 end
@@ -614,12 +662,14 @@ function M.on_error(params)
     }
     state.busy = false
     state.current_stream = nil
+    stop_spinner()
     render_transcript()
 end
 
 function M.on_send_accepted(request_id)
     state.active_request_id = request_id
     state.busy = true
+    ensure_spinner()
     render_transcript()
 end
 

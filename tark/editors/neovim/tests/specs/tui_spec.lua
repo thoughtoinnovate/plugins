@@ -30,6 +30,23 @@ describe('chat widget - ACP integration', function()
         assert.equals('plan', state.mode)
     end)
 
+    it('renders progress indicator in status line while busy', function()
+        state.messages = {}
+        state.transcript_buf = vim.api.nvim_create_buf(false, true)
+        vim.bo[state.transcript_buf].modifiable = false
+
+        chat.on_status({ busy = true, mode = 'ask' })
+        local lines = vim.api.nvim_buf_get_lines(state.transcript_buf, 0, 4, false)
+        assert.is_true((lines[3] or ''):match('progress=') ~= nil)
+        assert.is_true((lines[3] or ''):match('progress=%-') == nil)
+
+        chat.on_status({ busy = false, mode = 'ask' })
+        lines = vim.api.nvim_buf_get_lines(state.transcript_buf, 0, 4, false)
+        assert.is_true((lines[3] or ''):match('progress=%-') ~= nil)
+
+        state.transcript_buf = nil
+    end)
+
     it('on_delta creates assistant stream message', function()
         state.messages = {}
         state.current_stream = nil
