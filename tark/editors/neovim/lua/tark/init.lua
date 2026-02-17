@@ -2,7 +2,7 @@
 
 local M = {}
 
-M.version = '0.12.4'
+M.version = '0.12.5'
 
 M.config = {
     binary = nil,
@@ -13,7 +13,15 @@ M.config = {
         env = {},
         cwd = nil,
         protocol_version = 1,
-        profile = 'generic',
+        profile = 'auto',
+        timeouts = {
+            initialize_ms = 15000,
+            session_new_ms = 15000,
+            set_mode_ms = 15000,
+            set_config_option_ms = 15000,
+            prompt_ms = 0,
+            inline_completion_ms = 10000,
+        },
         client_capabilities = {
             fs = { readTextFile = false, writeTextFile = false },
             terminal = false,
@@ -91,6 +99,59 @@ local function get_context()
     return context
 end
 
+local function find_config_value(config_options, id)
+    if type(config_options) ~= 'table' then
+        return nil
+    end
+    for _, opt in ipairs(config_options) do
+        if type(opt) == 'table' and opt.id == id then
+            return opt.currentValue or opt.current_value or opt.value
+        end
+    end
+    return nil
+end
+
+local function get_option_values(option)
+    local values = {}
+    if type(option) ~= 'table' or type(option.options) ~= 'table' then
+        return values
+    end
+    for _, raw in ipairs(option.options) do
+        if type(raw) == 'string' and raw ~= '' then
+            table.insert(values, raw)
+        elseif type(raw) == 'table' then
+            local v = raw.value or raw.id or raw.name
+            if type(v) == 'string' and v ~= '' then
+                table.insert(values, v)
+            end
+        end
+    end
+    return values
+end
+
+local function apply_session_snapshot(snapshot)
+    if type(snapshot) ~= 'table' then
+        return
+    end
+    local mode = snapshot.modes and snapshot.modes.currentModeId or nil
+    local provider = find_config_value(snapshot.config_options or snapshot.configOptions, 'provider')
+    local model = find_config_value(snapshot.config_options or snapshot.configOptions, 'model')
+    get_chat().on_status({
+        mode = mode,
+        provider = provider,
+        model = model,
+    })
+end
+
+local function apply_config_options(config_options)
+    local provider = find_config_value(config_options, 'provider')
+    local model = find_config_value(config_options, 'model')
+    get_chat().on_status({
+        provider = provider,
+        model = model,
+    })
+end
+
 function M.setup(opts)
     M.config = vim.tbl_deep_extend('force', M.config, opts or {})
 
@@ -133,6 +194,18 @@ function M.setup(opts)
     end)
     get_acp().on('session/request_permission', function(params, respond)
         get_chat().on_permission_request(params, respond)
+    end)
+    get_acp().on('session/prompt_accepted', function(params)
+        if params and params.request_id then
+            get_chat().on_send_accepted(params.request_id)
+        end
+    end)
+    get_acp().on('session/config_options', function(params)
+        get_chat().on_config_options(params or {})
+        apply_config_options(params and params.config_options or nil)
+    end)
+    get_acp().on('session/started', function(params)
+        apply_session_snapshot(params)
     end)
 end
 
@@ -222,6 +295,7 @@ end
 function M.set_mode(mode)
     get_acp().set_mode(mode, function(ok, result_or_err)
         if ok then
+            get_chat().on_status({ mode = tostring(mode) })
             vim.notify('acp mode: ' .. tostring(mode), vim.log.levels.INFO)
         else
             vim.notify('acp: mode switch failed: ' .. tostring(result_or_err), vim.log.levels.ERROR)
@@ -230,8 +304,40 @@ function M.set_mode(mode)
 end
 
 function M.set_config_option(config_id, value)
+    local opt = get_acp().get_config_option(config_id)
+    if not opt then
+        vim.notify('acp: agent does not expose config option "' .. tostring(config_id) .. '"', vim.log.levels.WARN)
+        return
+    end
+    if opt.type == 'select' then
+        local values = get_option_values(opt)
+        if #values > 0 then
+            local allowed = {}
+            local matched = false
+            for _, v in ipairs(values) do
+                allowed[v] = true
+                if tostring(v) == tostring(value) then
+                    matched = true
+                end
+            end
+            if not matched then
+                vim.notify(
+                    'acp: invalid value for ' .. tostring(config_id) .. '. Allowed: ' .. table.concat(values, ', '),
+                    vim.log.levels.WARN
+                )
+                return
+            end
+        end
+    end
+
     get_acp().set_config_option(config_id, value, function(ok, result_or_err)
         if ok then
+            local config_options = type(result_or_err) == 'table' and (result_or_err.configOptions or result_or_err.config_options) or nil
+            if config_options then
+                apply_config_options(config_options)
+            else
+                apply_config_options(get_acp().get_config_options())
+            end
             vim.notify('acp config updated: ' .. config_id, vim.log.levels.INFO)
         else
             vim.notify('acp: config update failed: ' .. tostring(result_or_err), vim.log.levels.ERROR)

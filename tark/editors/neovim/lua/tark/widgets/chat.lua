@@ -41,8 +41,8 @@ end
 local function status_line()
     local busy = state.busy and 'busy' or 'idle'
     local mode = state.mode or 'ask'
-    local provider = state.provider or '-'
-    local model = state.model or '-'
+    local provider = (state.provider and state.provider ~= '') and state.provider or 'agent-managed'
+    local model = (state.model and state.model ~= '') and state.model or '-'
     local parts = {
         string.format('[%s]', busy),
         string.format('mode=%s', mode),
@@ -588,6 +588,17 @@ function M.on_status(params)
     elseif was_busy then
         stop_spinner()
     end
+    render_transcript()
+end
+
+function M.on_config_options(params)
+    local by_id = params and params.config_options_by_id or nil
+    if type(by_id) == 'table' then
+        state.config_options_by_id = by_id
+    else
+        state.config_options_by_id = {}
+    end
+    state.supports_config_switch = params and params.supports_config_switch == true or false
     render_transcript()
 end
 

@@ -12,9 +12,31 @@ describe('acp client', function()
         assert.is_function(acp.queue_size)
         assert.is_function(acp.is_connected)
         assert.is_function(acp.close)
+        assert.is_function(acp.get_profile)
+        assert.is_function(acp.get_config_options)
+        assert.is_function(acp.get_config_option)
+        assert.is_function(acp.supports_config_switch)
+        assert.is_function(acp.get_timeout_for_method)
     end)
 
     it('starts with empty queue', function()
         assert.equals(0, acp.queue_size())
+    end)
+
+    it('defaults to generic resolved profile in auto mode before initialize', function()
+        acp.setup({ profile = 'auto' })
+        assert.equals('generic', acp.get_profile())
+    end)
+
+    it('supports per-method timeout config', function()
+        acp.setup({
+            profile = 'generic',
+            timeouts = {
+                prompt_ms = 0,
+                set_mode_ms = 3210,
+            },
+        })
+        assert.equals(0, acp.get_timeout_for_method('session/prompt'))
+        assert.equals(3210, acp.get_timeout_for_method('session/set_mode'))
     end)
 end)

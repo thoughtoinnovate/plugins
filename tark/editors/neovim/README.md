@@ -78,7 +78,15 @@ require("tark").setup({
     env = {},                   -- extra env for ACP process
     cwd = nil,                  -- nil => current working directory
     protocol_version = 1,
-    profile = "auto",           -- auto | generic | tark_extension
+    profile = "auto",           -- auto | generic | tark | codex | gemini | jetbrains
+    timeouts = {
+      initialize_ms = 15000,
+      session_new_ms = 15000,
+      set_mode_ms = 15000,
+      set_config_option_ms = 15000,
+      prompt_ms = 0,            -- 0/nil disables timeout for streamed prompts
+      inline_completion_ms = 10000,
+    },
     client_capabilities = {
       fs = { readTextFile = false, writeTextFile = false },
       terminal = false,
@@ -86,6 +94,18 @@ require("tark").setup({
   },
 })
 ```
+
+### Timeout behavior
+
+- Timeouts are method-specific.
+- `session/prompt` uses profile-based defaults and can be disabled (`prompt_ms = 0`) to wait for stream completion (`session/update` with `agent_message_end`).
+- Timeout errors include method and resolved profile for debugging.
+
+### Provider/model and config options
+
+- Provider/model are shown only when exposed by agent `configOptions`.
+- `:AcpConfigSet` validates option existence and allowed values (for select options with explicit choices).
+- If an agent does not expose a config option, the plugin shows a capability warning instead of failing hard.
 
 ## Compatibility matrix
 

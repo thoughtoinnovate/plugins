@@ -14,6 +14,8 @@ local M = {
     mode = 'ask',
     provider = nil,
     model = nil,
+    config_options_by_id = {},
+    supports_config_switch = false,
 
     send_queue = {},
     queue_size = 0,

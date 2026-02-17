@@ -56,6 +56,17 @@ describe('chat widget - ACP lifecycle', function()
         assert.equals(3, state.queue_size)
     end)
 
+    it('tracks discovered config option support', function()
+        chat.on_config_options({
+            config_options_by_id = {
+                provider = { id = 'provider', current_value = 'ollama' },
+            },
+            supports_config_switch = true,
+        })
+        assert.is_true(state.supports_config_switch)
+        assert.is_not_nil(state.config_options_by_id.provider)
+    end)
+
     it('renders multiline error safely', function()
         state.transcript_buf = vim.api.nvim_create_buf(false, true)
         vim.bo[state.transcript_buf].modifiable = false
