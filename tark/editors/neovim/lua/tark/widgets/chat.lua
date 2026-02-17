@@ -276,8 +276,8 @@ render_transcript = function()
         push_line('')
     end
 
-    push_line('Input keys: Enter=send/save, Ctrl-C=cancel, q=close')
-    push_line('Interaction keys: j/k=move, Enter=activate, space=toggle, i=edit text, Esc=leave edit')
+    push_line('Input keys: Enter=send, Ctrl-C=cancel, q=close')
+    push_line('Interaction keys: j/k=move, Enter=activate, space=toggle option, Ctrl-C=cancel')
 
     clamp_action_cursor()
 
