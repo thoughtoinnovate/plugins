@@ -48,6 +48,26 @@ local function sanitize_text(value)
     return s
 end
 
+local function normalize_env(env)
+    if type(env) ~= 'table' then
+        return nil
+    end
+
+    local out = {}
+    local has_any = false
+    for k, v in pairs(env) do
+        if type(k) == 'string' and v ~= nil then
+            out[k] = tostring(v)
+            has_any = true
+        end
+    end
+
+    if not has_any then
+        return nil
+    end
+    return out
+end
+
 local function parse_error(err)
     if not err then
         return nil
@@ -464,6 +484,7 @@ function M.ensure_started(cb)
     end
 
     if not M.state.job_id then
+        local env = normalize_env(M.config.env)
         local opts = {
             stdout_buffered = false,
             stderr_buffered = false,
@@ -477,7 +498,7 @@ function M.ensure_started(cb)
             end,
             on_exit = on_exit,
             cwd = M.config.cwd or vim.fn.getcwd(),
-            env = M.config.env,
+            env = env,
         }
         local job_id = vim.fn.jobstart(cmd, opts)
 
