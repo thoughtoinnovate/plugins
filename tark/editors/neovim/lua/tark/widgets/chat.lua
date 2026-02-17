@@ -216,6 +216,14 @@ render_transcript = function()
                 table.insert(lines, part)
             end
         end
+        if msg.thinking and msg.thinking ~= '' then
+            push_line('')
+            push_line('> reasoning')
+            local tparts = sanitize_lines(msg.thinking)
+            for _, tpart in ipairs(tparts) do
+                push_line('> ' .. tpart)
+            end
+        end
         push_line('')
     end
 
@@ -511,9 +519,14 @@ function M.on_update(params)
         end
         local idx = ensure_response_message(response_id)
         local content = update.content or {}
+        local content_type = tostring(content.type or 'text')
         local text = content.text or ''
         local msg = state.messages[idx]
-        msg.text = (msg.text or '') .. text
+        if content_type == 'reasoning' or content_type == 'thinking' then
+            msg.thinking = (msg.thinking or '') .. text
+        else
+            msg.text = (msg.text or '') .. text
+        end
         state.current_stream = idx
         state.current_stream_request_id = response_id
         state.busy = true
