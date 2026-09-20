@@ -1,0 +1,10 @@
+# Excluded from the packaged .vsix (see `vsce package`).
+.vscode/**
+.vscode-test/**
+src/**
+tsconfig.json
+**/*.map
+.gitignore
+node_modules/**
+dist/test/**
+README.md

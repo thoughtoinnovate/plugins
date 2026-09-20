@@ -1,0 +1,93 @@
+{
+  "name": "tark",
+  "displayName": "Tark AI Agent",
+  "description": "AI-powered coding agent: chat, permission-gated tools, and inline completions via the ACP v1 backend.",
+  "version": "0.12.6",
+  "publisher": "tark",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anomalyco/opencode"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onView:tark.chatView",
+    "onCommand:tark.chat",
+    "onCommand:tark.complete",
+    "onCommand:tark.start",
+    "onCommand:tark.stop"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "tark",
+          "title": "Tark",
+          "icon": "resources/tark.svg"
+        }
+      ]
+    },
+    "views": {
+      "tark": [
+        {
+          "type": "webview",
+          "id": "tark.chatView",
+          "name": "Tark Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "tark.chat",
+        "title": "Tark: Open Chat"
+      },
+      {
+        "command": "tark.complete",
+        "title": "Tark: Request Inline Completion"
+      },
+      {
+        "command": "tark.start",
+        "title": "Tark: Start Agent"
+      },
+      {
+        "command": "tark.stop",
+        "title": "Tark: Stop Agent"
+      }
+    ],
+    "configuration": {
+      "title": "Tark",
+      "properties": {
+        "tark.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the tark binary. When empty, the PATH is searched for 'tark'."
+        },
+        "tark.serverArgs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra arguments prepended before the 'acp' subcommand when spawning the tark backend."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "npm run compile && node --test dist/test/unit/*.test.js",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.0",
+    "@types/vscode": "1.85.0",
+    "typescript": "^5.4.5"
+  }
+}
