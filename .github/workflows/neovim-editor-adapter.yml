@@ -61,8 +61,8 @@ jobs:
       - name: ACP headless smoke
         run: |
           nvim --headless -u tests/minimal_init.lua \
-            -c "lua require('tark').setup({auto_download=false, lsp={enabled=false}, ghost={enabled=false}})" \
-            -c "lua require('tark').chat_open()" \
+            -c "lua require('tark').setup({auto_download=false})" \
+            -c "lua require('tark').open_chat()" \
             -c "qa!"
 
   compat-matrix:

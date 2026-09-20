@@ -94,12 +94,6 @@ function M.open_chat(prompt)
   chat.open(M.get_config(), prompt)
 end
 
---- Backward-compatible alias for `open_chat` (pre-0.12.6 entry point).
----@param prompt string|nil initial prompt to send
-function M.chat_open(prompt)
-  M.open_chat(prompt)
-end
-
 --- Request one inline completion at the cursor (TarkComplete).
 function M.complete()
   local completion = require('tark.completion')
